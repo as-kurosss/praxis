@@ -1,0 +1,17 @@
+[package]
+name = "praxis-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+praxis-core = { path = "../core" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+wiremock.workspace = true

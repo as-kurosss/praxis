@@ -1,0 +1,11 @@
+[package]
+name = "praxis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+praxis-core = { path = "../core" }
+praxis-runtime = { path = "../runtime" }
+clap.workspace = true
+tokio.workspace = true
