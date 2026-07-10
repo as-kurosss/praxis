@@ -3,9 +3,11 @@
 //! Iterates until a verifier confirms the goal or a stop condition is met.
 //! State MUST implement `serde::Serialize + Deserialize` for suspend/resume.
 
-use super::loop_trait::{elapsed_ms, Context, Loop, LoopResult};
+use super::loop_trait::{Context, Loop, LoopResult, elapsed_ms};
 use super::types::{LoopStatus, StopReason};
 use super::verifier::{Verdict, Verifier};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::time::Instant;
 
 /// Handler function type for goal-based loops.
@@ -17,7 +19,7 @@ pub type GoalHandler<S, E> = dyn Fn(&mut S) -> Result<(), E> + Send + Sync;
 /// Stops when the verifier returns `Met`, or when `max_iterations`/`timeout` is hit.
 ///
 /// # Type parameters
-/// * `S` — mutable state type (must be `Clone + Send`; should be `Serialize + Deserialize` for persistence)
+/// * `S` — mutable state type (must be `Clone + Send + Serialize + DeserializeOwned` for suspend/resume)
 /// * `E` — error type produced by the handler
 pub struct GoalLoop<S, E> {
     handler: Box<GoalHandler<S, E>>,
@@ -32,7 +34,9 @@ impl<S, E> GoalLoop<S, E> {
 }
 
 #[async_trait::async_trait]
-impl<S: Clone + Send + 'static, E: std::fmt::Debug + Send + 'static> Loop for GoalLoop<S, E> {
+impl<S: Clone + Serialize + DeserializeOwned + Send + 'static, E: std::fmt::Debug + Send + 'static>
+    Loop for GoalLoop<S, E>
+{
     type Context = ();
     type State = S;
     type Output = S;
@@ -54,7 +58,9 @@ impl<S: Clone + Send + 'static, E: std::fmt::Debug + Send + 'static> Loop for Go
                 let elapsed = elapsed_ms(&start);
                 return LoopResult {
                     output: None,
-                    status: LoopStatus::Completed(StopReason::Timeout { elapsed_ms: elapsed }),
+                    status: LoopStatus::Completed(StopReason::Timeout {
+                        elapsed_ms: elapsed,
+                    }),
                     iterations: iteration,
                     duration_ms: elapsed,
                 };
@@ -72,11 +78,7 @@ impl<S: Clone + Send + 'static, E: std::fmt::Debug + Send + 'static> Loop for Go
             // Verify goal
             match self.verifier.verify(state) {
                 Verdict::Met => {
-                    return LoopResult::success(
-                        state.clone(),
-                        iteration,
-                        elapsed_ms(&start),
-                    );
+                    return LoopResult::success(state.clone(), iteration, elapsed_ms(&start));
                 }
                 Verdict::Error => {
                     return LoopResult::failure(
@@ -106,10 +108,11 @@ mod tests {
     use super::*;
     use crate::loops::verifier::AlwaysMet;
     use crate::loops::{CycleType, LoopId, StopCondition};
+    use serde::{Deserialize, Serialize};
     use std::time::Duration;
 
     /// A simple counter state for testing.
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     struct Counter {
         value: u32,
     }
@@ -248,6 +251,79 @@ mod tests {
 
         assert!(result.is_success());
         assert_eq!(result.iterations, 1);
+    }
+
+    #[tokio::test]
+    async fn test_goal_state_serialize_roundtrip() {
+        // Execute a GoalLoop, then serialize and deserialize the final state.
+        let loop_impl = GoalLoop::<Counter, String>::new(
+            Box::new(|s: &mut Counter| {
+                s.value += 1;
+                Ok(())
+            }),
+            Box::new(TargetVerifier { target: 3 }),
+        );
+        let ctx = Context::new(
+            LoopId::new(),
+            CycleType::Goal,
+            StopCondition::max_iterations(10),
+            (),
+        );
+        let mut state = Counter { value: 0 };
+
+        let result = loop_impl.execute(ctx, &mut state).await;
+
+        assert!(result.is_success());
+        assert_eq!(result.iterations, 3);
+
+        // Serialize the output state (which is a clone of the final state)
+        let output = result.output.unwrap();
+        let json = serde_json::to_string(&output).expect("serialize should succeed");
+
+        // Deserialize back
+        let deserialized: Counter =
+            serde_json::from_str(&json).expect("deserialize should succeed");
+
+        assert_eq!(deserialized, output);
+        assert_eq!(deserialized.value, 3);
+    }
+
+    #[tokio::test]
+    async fn test_goal_state_resume() {
+        // Simulate suspend/resume: save partial state, restore, continue.
+        let loop_impl = GoalLoop::<Counter, String>::new(
+            Box::new(|s: &mut Counter| {
+                s.value += 1;
+                Ok(())
+            }),
+            Box::new(TargetVerifier { target: 5 }),
+        );
+
+        // First execution: count 0 → 3, interrupted before goal.
+        let mut state = Counter { value: 0 };
+
+        // Manually simulate partial progress (as if graph saved state mid-way)
+        state.value = 3;
+
+        // Serialize state (suspend)
+        let serialized = serde_json::to_string(&state).expect("suspend serialize should succeed");
+
+        // Deserialize state (resume)
+        let mut restored: Counter =
+            serde_json::from_str(&serialized).expect("resume deserialize should succeed");
+
+        // Continue execution from restored state
+        let ctx = Context::new(
+            LoopId::new(),
+            CycleType::Goal,
+            StopCondition::max_iterations(10),
+            (),
+        );
+        let result = loop_impl.execute(ctx, &mut restored).await;
+
+        assert!(result.is_success());
+        assert_eq!(result.iterations, 2); // 2 more steps to reach 5
+        assert_eq!(restored.value, 5);
     }
 
     #[tokio::test]

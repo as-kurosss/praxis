@@ -3,7 +3,7 @@
 //! The simplest cycle: one handler invocation inside a graph node.
 //! Runs once, returns immediately with the result.
 
-use super::loop_trait::{elapsed_ms, Context, Loop, LoopResult};
+use super::loop_trait::{Context, Loop, LoopResult, elapsed_ms};
 use std::time::Instant;
 
 /// Handler function type for turn-based loops.

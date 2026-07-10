@@ -7,7 +7,7 @@
 //!
 //! The graph itself implements [`Loop`], so graphs can be nested.
 
-use super::loop_trait::{elapsed_ms, Context, Loop, LoopResult};
+use super::loop_trait::{Context, Loop, LoopResult, elapsed_ms};
 use std::collections::{HashMap, HashSet};
 
 /// Unique identifier for a graph node.
@@ -346,8 +346,7 @@ mod tests {
         use crate::loops::GoalLoop;
         use crate::loops::verifier::AlwaysMet;
 
-        type TestGraph =
-            Graph<GoalLoop<Vec<&'static str>, String>, (), Vec<&'static str>, Vec<&'static str>>;
+        type TestGraph = Graph<GoalLoop<Vec<String>, String>, (), Vec<String>, Vec<String>>;
 
         let a = NodeId::from_id("a");
         let b = NodeId::from_id("b");
@@ -358,8 +357,8 @@ mod tests {
         graph.add_node(GraphNode::new(
             a.clone(),
             GoalLoop::new(
-                Box::new(|s: &mut Vec<&'static str>| {
-                    s.push("a");
+                Box::new(|s: &mut Vec<String>| {
+                    s.push("a".to_string());
                     Ok(())
                 }),
                 Box::new(AlwaysMet),
@@ -369,8 +368,8 @@ mod tests {
         graph.add_node(GraphNode::new(
             b.clone(),
             GoalLoop::new(
-                Box::new(|s: &mut Vec<&'static str>| {
-                    s.push("b");
+                Box::new(|s: &mut Vec<String>| {
+                    s.push("b".to_string());
                     Ok(())
                 }),
                 Box::new(AlwaysMet),
@@ -380,8 +379,8 @@ mod tests {
         graph.add_node(GraphNode::new(
             c.clone(),
             GoalLoop::new(
-                Box::new(|s: &mut Vec<&'static str>| {
-                    s.push("c");
+                Box::new(|s: &mut Vec<String>| {
+                    s.push("c".to_string());
                     Ok(())
                 }),
                 Box::new(AlwaysMet),
@@ -398,12 +397,15 @@ mod tests {
             StopCondition::max_iterations(10),
             (),
         );
-        let mut state: Vec<&'static str> = Vec::new();
+        let mut state: Vec<String> = Vec::new();
 
         let result = graph.execute(ctx, &mut state).await;
 
         assert!(result.is_success());
-        assert_eq!(state, vec!["a", "b", "c"]);
+        assert_eq!(
+            state,
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
         assert_eq!(result.iterations, 3);
     }
 
