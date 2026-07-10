@@ -285,28 +285,25 @@ where
     }
 }
 
-#[async_trait::async_trait]
-impl<I, C, S, O> Loop for Graph<I, C, S, O>
+// Shared execution logic — used by both `execute` and `resume`.
+impl<I, C, S, O> Graph<I, C, S, O>
 where
     I: Loop<Context = C, State = S, Output = O>,
     C: Clone + Send + Sync + 'static,
     S: Send + Sync + 'static,
     O: Send + Sync + 'static,
 {
-    type Context = C;
-    type State = S;
-    type Output = O;
-
-    async fn execute(
+    async fn execute_from(
         &self,
-        ctx: Context<Self::Context>,
-        state: &mut Self::State,
-    ) -> LoopResult<Self::Output> {
+        ctx: Context<C>,
+        state: &mut S,
+        start_node: NodeId,
+    ) -> LoopResult<O> {
         use std::time::Instant;
         let start = Instant::now();
         let max_iter = ctx.stop_condition.max_iterations.unwrap_or(u32::MAX);
         let timeout = ctx.stop_condition.timeout;
-        let mut current = self.start_node.clone();
+        let mut current = start_node;
 
         for iteration in 1..=max_iter {
             // Check graph-level timeout
@@ -383,6 +380,58 @@ where
             max_iter,
             elapsed_ms(&start),
         )
+    }
+}
+
+impl<I, C, S, O> Graph<I, C, S, O>
+where
+    I: Loop<Context = C, State = S, Output = O>,
+    C: Clone + Send + Sync + 'static,
+    S: Clone + Send + Sync + 'static,
+    O: Send + Sync + 'static,
+{
+    /// Resume execution from a [`GraphSnapshot`].
+    ///
+    /// Restores the state from `snapshot.state` into `state`, then continues
+    /// execution from the node recorded in `snapshot.current_node` using the
+    /// same timeout and iteration logic as [`execute`](Self::execute).
+    ///
+    /// # Arguments
+    /// * `snapshot` - Snapshot captured during a previous execution
+    /// * `ctx` - Execution context with stop conditions
+    /// * `state` - Mutable state (will be overwritten with snapshot state)
+    ///
+    /// # Returns
+    /// `LoopResult<O>` with the outcome of the resumed execution
+    pub async fn resume(
+        &self,
+        snapshot: GraphSnapshot<S>,
+        ctx: Context<C>,
+        state: &mut S,
+    ) -> LoopResult<O> {
+        *state = snapshot.state;
+        self.execute_from(ctx, state, snapshot.current_node).await
+    }
+}
+
+#[async_trait::async_trait]
+impl<I, C, S, O> Loop for Graph<I, C, S, O>
+where
+    I: Loop<Context = C, State = S, Output = O>,
+    C: Clone + Send + Sync + 'static,
+    S: Send + Sync + 'static,
+    O: Send + Sync + 'static,
+{
+    type Context = C;
+    type State = S;
+    type Output = O;
+
+    async fn execute(
+        &self,
+        ctx: Context<Self::Context>,
+        state: &mut Self::State,
+    ) -> LoopResult<Self::Output> {
+        self.execute_from(ctx, state, self.start_node.clone()).await
     }
 }
 
@@ -974,5 +1023,38 @@ use super::*;
         assert!(result.is_success());
         assert_eq!(result.output, Some("Fallback handled".to_string()));
         assert_eq!(result.iterations, 2);
+    }
+
+    // ── Pause / Resume ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_graph_pause_resume() {
+        let a = NodeId::from_id("a");
+        let b = NodeId::from_id("b");
+        let mut graph = Graph::new(a.clone());
+        graph.add_node(GraphNode::new(a.clone(), echo_loop(), "step-a"));
+        graph.add_node(GraphNode::new(b.clone(), echo_loop(), "step-b"));
+        graph.add_edge(&a, Edge::new(b.clone()));
+        graph.add_end_node(b.clone());
+
+        // Full execution baseline
+        let full_result = run_graph(&graph, "data", 10).await;
+        assert!(full_result.is_success());
+        assert_eq!(full_result.output, Some("data".to_string()));
+        assert_eq!(full_result.iterations, 2);
+
+        // Snapshot at node B (after A completed, B is next to execute)
+        let state_after_a = ();
+        let snapshot = graph.snapshot(b.clone(), &state_after_a);
+
+        // Resume from snapshot
+        let resume_ctx = make_ctx("data", 10);
+        let mut resume_state = ();
+        let resume_result = graph.resume(snapshot, resume_ctx, &mut resume_state).await;
+
+        assert!(resume_result.is_success());
+        assert_eq!(resume_result.output, Some("data".to_string()));
+        // Resume executed 1 node (just B)
+        assert_eq!(resume_result.iterations, 1);
     }
 }
