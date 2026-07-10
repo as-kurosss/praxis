@@ -3,7 +3,11 @@
 //! This crate provides:
 //! * [`OpenAiClient`] — an OpenAI-compatible [`LlmClient`](praxis_core::agent::LlmClient)
 //!   implementation that works with any OpenAI-compatible API.
+//! * [`AnthropicClient`] — an [`LlmClient`](praxis_core::agent::LlmClient)
+//!   implementation for Anthropic's Messages API.
 
+pub mod anthropic;
 pub mod openai;
 
+pub use anthropic::*;
 pub use openai::*;
