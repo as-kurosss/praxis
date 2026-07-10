@@ -8,10 +8,11 @@
 //! The graph itself implements [`Loop`], so graphs can be nested.
 
 use super::loop_trait::{Context, Loop, LoopResult, elapsed_ms};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 /// Unique identifier for a graph node.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NodeId(String);
 
 impl NodeId {
@@ -103,6 +104,67 @@ impl<O> Edge<O> {
     }
 }
 
+/// Serializable snapshot of a graph's execution position and state.
+///
+/// Captures which node is currently executing and the accumulated state.
+/// Useful for pause/resume workflows: save between graph node transitions
+/// and restore to continue execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphSnapshot<S> {
+    /// The node that should execute next on resume.
+    pub current_node: NodeId,
+    /// The accumulated mutable state at this point.
+    pub state: S,
+}
+
+impl<S: Serialize> GraphSnapshot<S> {
+    /// Serialize this snapshot to a JSON string.
+    ///
+    /// # Errors
+    /// Returns `serde_json::Error` if serialization fails.
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+}
+
+impl<S: serde::de::DeserializeOwned> GraphSnapshot<S> {
+    /// Deserialize a snapshot from a JSON string.
+    ///
+    /// # Errors
+    /// Returns `serde_json::Error` if deserialization fails.
+    pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(json)
+    }
+}
+
+/// Serializable graph topology — the structural definition of a graph
+/// without inner loop closures (which cannot be serialized).
+///
+/// Defines which nodes exist, their human-readable labels, how they are
+/// connected, and which nodes are terminal. This is the "skeleton" of a
+/// graph that can be saved, inspected, or reconstructed in another process.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphTopology {
+    /// Name/label of each node in the graph.
+    pub nodes: Vec<NodeDescriptor>,
+    /// Directed edges between nodes (unconditional only; conditional edges
+    /// are excluded because their condition closures cannot be serialized).
+    pub edges: Vec<(NodeId, NodeId)>,
+    /// The node where execution starts.
+    pub start_node: NodeId,
+    /// Nodes that, when reached, terminate graph execution.
+    pub end_nodes: Vec<NodeId>,
+}
+
+/// Descriptor of a single node in a graph's topology.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeDescriptor {
+    /// Unique identifier of this node.
+    pub id: NodeId,
+    /// Human-readable label.
+    pub label: String,
+}
+
 /// A **State Graph** — directed execution graph that composes `Loop` primitives.
 ///
 /// The graph itself implements [`Loop`], so it can be used anywhere a loop is
@@ -171,6 +233,55 @@ where
     /// Set of end (terminal) node IDs.
     pub fn end_nodes(&self) -> &HashSet<NodeId> {
         &self.end_nodes
+    }
+
+    /// Export the graph's topology as a serializable [`GraphTopology`].
+    ///
+    /// This captures the structural skeleton (nodes, labels, edges, start/end)
+    /// without inner loop closures, which cannot be serialized.
+    /// Conditional edges are **excluded** from the output because their
+    /// condition closures are non-serializable.
+    #[must_use]
+    pub fn topology(&self) -> GraphTopology {
+        GraphTopology {
+            nodes: self
+                .nodes
+                .values()
+                .map(|n| NodeDescriptor {
+                    id: n.id.clone(),
+                    label: n.label.clone(),
+                })
+                .collect(),
+            edges: self
+                .adjacency
+                .iter()
+                .flat_map(|(from, edge_list)| {
+                    edge_list
+                        .iter()
+                        // Only unconditional edges are serializable
+                        .filter(|e| e.condition.is_none())
+                        .map(move |e| (from.clone(), e.to.clone()))
+                })
+                .collect(),
+            start_node: self.start_node.clone(),
+            end_nodes: self.end_nodes.iter().cloned().collect(),
+        }
+    }
+
+    /// Create a [`GraphSnapshot`] capturing the current execution position
+    /// and accumulated state.
+    ///
+    /// Useful for pause/resume: save the snapshot after a graph node completes,
+    /// then restore it later to continue from the same position.
+    #[must_use]
+    pub fn snapshot(&self, current_node: NodeId, state: &S) -> GraphSnapshot<S>
+    where
+        S: Clone,
+    {
+        GraphSnapshot {
+            current_node,
+            state: state.clone(),
+        }
     }
 }
 
@@ -279,6 +390,7 @@ where
 mod tests {
     use super::*;
     use crate::loops::{CycleType, LoopId, LoopStatus, StopCondition, TurnLoop};
+    use serde::{Deserialize, Serialize};
 
     /// Helper: create a `TurnLoop` that echoes input.
     fn echo_loop() -> TurnLoop<String, String> {
@@ -533,5 +645,128 @@ mod tests {
         // outputs "nest".
         assert_eq!(result.output, Some("nest".to_string()));
         assert_eq!(result.iterations, 2);
+    }
+
+    // ── Graph persistence: topology ────────────────────────────
+
+    #[tokio::test]
+    async fn test_graph_topology_export() {
+        type TestGraph = Graph<TurnLoop<String, String>, String, (), String>;
+        let a = NodeId::from_id("a");
+        let b = NodeId::from_id("b");
+        let mut graph = TestGraph::new(a.clone());
+        graph.add_node(GraphNode::new(a.clone(), echo_loop(), "step-a"));
+        graph.add_node(GraphNode::new(b.clone(), echo_loop(), "step-b"));
+        graph.add_edge(&a, Edge::new(b.clone()));
+        graph.add_end_node(b);
+
+        let topo = graph.topology();
+        assert_eq!(topo.nodes.len(), 2);
+        assert_eq!(topo.edges.len(), 1);
+        assert_eq!(topo.edges[0].0.to_string(), "a");
+        assert_eq!(topo.edges[0].1.to_string(), "b");
+        assert_eq!(topo.start_node.to_string(), "a");
+        assert_eq!(topo.end_nodes.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_graph_topology_serialize_roundtrip() {
+        type TestGraph = Graph<TurnLoop<String, String>, String, (), String>;
+        let a = NodeId::from_id("a");
+        let b = NodeId::from_id("b");
+        let mut graph = TestGraph::new(a.clone());
+        graph.add_node(GraphNode::new(a.clone(), echo_loop(), "step-a"));
+        graph.add_node(GraphNode::new(b.clone(), echo_loop(), "step-b"));
+        graph.add_edge(&a, Edge::new(b.clone()));
+        graph.add_end_node(b);
+
+        let topo = graph.topology();
+        let json = serde_json::to_string(&topo).expect("serialize topology");
+        let restored: GraphTopology = serde_json::from_str(&json).expect("deserialize topology");
+
+        assert_eq!(restored.nodes.len(), 2);
+        assert_eq!(restored.edges.len(), 1);
+        assert_eq!(restored.start_node.to_string(), "a");
+    }
+
+    #[tokio::test]
+    async fn test_graph_topology_excludes_conditional_edges() {
+        type TestGraph = Graph<TurnLoop<String, String>, String, (), String>;
+        let a = NodeId::from_id("a");
+        let b = NodeId::from_id("b");
+        let c = NodeId::from_id("c");
+        let mut graph = TestGraph::new(a.clone());
+
+        let fail_loop = TurnLoop::new(Box::new(|_: String| Err("oops".to_string())));
+        graph.add_node(GraphNode::new(a.clone(), fail_loop, "fail"));
+        graph.add_node(GraphNode::new(b.clone(), echo_loop(), "ok"));
+        graph.add_node(GraphNode::new(c.clone(), echo_loop(), "fallback"));
+
+        let on_success =
+            Box::new(|r: &LoopResult<String>| r.is_success()) as Box<EdgeCondition<String>>;
+        let on_failure =
+            Box::new(|r: &LoopResult<String>| !r.is_success()) as Box<EdgeCondition<String>>;
+
+        graph.add_edge(&a, Edge::with_condition(b.clone(), on_success));
+        graph.add_edge(&a, Edge::with_condition(c.clone(), on_failure));
+
+        let topo = graph.topology();
+        // Conditional edges are excluded from topology
+        assert_eq!(topo.edges.len(), 0);
+    }
+
+    // ── Graph persistence: snapshot ────────────────────────────
+
+    #[tokio::test]
+    async fn test_graph_snapshot_serialize_roundtrip() {
+        let a = NodeId::from_id("a");
+
+        #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+        struct MyState {
+            value: u32,
+        }
+
+        let graph = Graph::<TurnLoop<String, String>, String, MyState, String>::new(a.clone());
+        let state = MyState { value: 42 };
+        let snapshot = graph.snapshot(a.clone(), &state);
+
+        // JSON round-trip
+        let json = snapshot.to_json().expect("serialize snapshot");
+        let restored: GraphSnapshot<MyState> =
+            GraphSnapshot::from_json(&json).expect("deserialize snapshot");
+
+        assert_eq!(restored.current_node.to_string(), "a");
+        assert_eq!(restored.state.value, 42);
+    }
+
+    #[tokio::test]
+    async fn test_graph_snapshot_resume_from_saved_state() {
+        type TestGraph = Graph<TurnLoop<String, String>, String, (), String>;
+        let a = NodeId::from_id("a");
+        let b = NodeId::from_id("b");
+        let mut graph = TestGraph::new(a.clone());
+        graph.add_node(GraphNode::new(a.clone(), echo_loop(), "step-a"));
+        graph.add_node(GraphNode::new(b.clone(), echo_loop(), "step-b"));
+        graph.add_edge(&a, Edge::new(b.clone()));
+        graph.add_end_node(b.clone());
+
+        // Simulate: execution reached node 'b', save snapshot
+        let snapshot = graph.snapshot(
+            b.clone(), // current position after a completed
+            &(),       // accumulated state
+        );
+
+        // Serialize snapshot (save to disk / db)
+        let json = snapshot.to_json().expect("serialize");
+
+        // Later: deserialize (load from disk / db)
+        let restored: GraphSnapshot<()> = GraphSnapshot::from_json(&json).expect("deserialize");
+
+        // The snapshot correctly captures the position and state for resume.
+        // In a real scenario the graph runner would use `restored.current_node`
+        // to continue execution from where it left off.
+        assert_eq!(restored.current_node, b);
+        // Verify the snapshot data survives a full JSON round-trip
+        assert_eq!(restored.state, ());
     }
 }
