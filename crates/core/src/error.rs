@@ -18,6 +18,28 @@ pub enum Error {
     #[error("Operation cancelled")]
     Cancelled,
 
+    #[error("JSON serialization error: {0}")]
+    Json(#[from] serde_json::Error),
+
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("Access denied to resource '{resource}': {reason}")]
+    AccessDenied {
+        /// The resource being accessed (e.g. "shell", "read: /etc/passwd").
+        resource: String,
+        /// Human-readable reason for the denial.
+        reason: String,
+    },
+
+    #[error("Sandbox error during operation '{operation}': {detail}")]
+    SandboxError {
+        /// The sandbox operation that failed.
+        operation: String,
+        /// Error detail.
+        detail: String,
+    },
+
     #[error(transparent)]
     Internal(#[from] Box<dyn std::error::Error + Send + Sync>),
 }

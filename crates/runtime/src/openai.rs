@@ -342,6 +342,7 @@ fn from_openai_response(resp: OpenAiResponse) -> Result<ChatResponse, OpenAiErro
 #[cfg(test)]
 mod tests {
     use super::*;
+    use praxis_core::agent::ToolCategory;
     use serde_json::json;
     use wiremock::matchers::{bearer_token, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -400,6 +401,7 @@ mod tests {
             name: "test_tool".into(),
             description: "A test".into(),
             parameters: json!({"type": "object"}),
+            category: ToolCategory::Generic,
         };
         let openai_tool = OpenAiTool {
             type_: "function".into(),
@@ -418,6 +420,7 @@ mod tests {
             name: "echo".into(),
             description: "echo".into(),
             parameters: json!({"type": "object"}),
+            category: ToolCategory::Generic,
         };
         let req = ChatRequest {
             messages: vec![ChatMessage::system("You are"), msg],
@@ -840,10 +843,9 @@ mod tests {
 
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
-            .respond_with(
-                ResponseTemplate::new(500)
-                    .set_body_json(json!({"error": {"message": "Internal server error", "type": "server_error"}})),
-            )
+            .respond_with(ResponseTemplate::new(500).set_body_json(
+                json!({"error": {"message": "Internal server error", "type": "server_error"}}),
+            ))
             .mount(&mock_server)
             .await;
 
@@ -941,7 +943,10 @@ mod tests {
         };
 
         let result = client.chat(req).await.unwrap();
-        assert_eq!(result.message.content.as_deref(), Some("Hello, 世界! 🌍\nNew line here.\tTabbed."));
+        assert_eq!(
+            result.message.content.as_deref(),
+            Some("Hello, 世界! 🌍\nNew line here.\tTabbed.")
+        );
     }
 
     #[tokio::test]

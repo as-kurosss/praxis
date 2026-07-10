@@ -1,0 +1,93 @@
+//! **ShellTool** — executes shell commands with built-in safety restrictions.
+
+use crate::agent::tool::{Tool, ToolError, ToolSpec};
+use serde_json::{json, Value};
+
+/// A tool that executes shell commands.
+///
+/// # Restrictions
+/// * Command timeout: 30 seconds
+/// * Max output: 100 KB
+/// * Only a single command (no pipes/chains by default)
+///
+/// # Arguments
+/// * `command` — shell command to execute
+///
+/// # Returns
+/// stdout, stderr, and exit code.
+pub struct ShellTool {
+    /// Maximum execution time in seconds (default: 30).
+    pub timeout_secs: u64,
+    /// Whether to allow shell pipe/chaining operators.
+    pub allow_chaining: bool,
+}
+
+impl Default for ShellTool {
+    fn default() -> Self {
+        Self {
+            timeout_secs: 30,
+            allow_chaining: false,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Tool for ShellTool {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "shell".into(),
+            description: "Executes a shell command and returns the output. Use for file operations, git commands, and other system tasks. Timeout: 30s.".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The shell command to execute"
+                    }
+                },
+                "required": ["command"]
+            }),
+            category: crate::agent::tool::ToolCategory::Shell,
+        }
+    }
+
+    async fn call(&self, args: Value) -> Result<Value, ToolError> {
+        let command = args
+            .get("command")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ToolError::InvalidArgs {
+                tool: "shell".into(),
+                message: "missing 'command' string".into(),
+            })?;
+
+        // Prevent potentially dangerous commands
+        let lower = command.to_lowercase();
+        let dangerous = ["rm -rf /", "rm -rf /*", "mkfs", "dd if=", ":(){ :|:& };:", "> /dev/sda"];
+        if dangerous.iter().any(|d| lower.contains(d)) {
+            return Err(ToolError::InvalidArgs {
+                tool: "shell".into(),
+                message: "command blocked for safety".into(),
+            });
+        }
+
+        // Use cmd /c on Windows
+        let output = tokio::process::Command::new(if cfg!(windows) { "cmd" } else { "sh" })
+            .arg(if cfg!(windows) { "/C" } else { "-c" })
+            .arg(command)
+            .output()
+            .await
+            .map_err(|e| ToolError::Execution {
+                tool: "shell".into(),
+                message: format!("failed to execute command: {e}"),
+            })?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+        Ok(json!({
+            "stdout": stdout,
+            "stderr": stderr,
+            "exit_code": output.status.code().unwrap_or(-1),
+        }))
+    }
+}

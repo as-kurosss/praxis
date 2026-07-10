@@ -1,5 +1,5 @@
 use clap::Parser;
-use praxis_core::agent::{Agent, AgentConfig, Tool, ToolError, ToolSet, ToolSpec};
+use praxis_core::agent::{Agent, AgentConfig, Tool, ToolCategory, ToolError, ToolSet, ToolSpec};
 use praxis_core::loops::{Context, CycleType, Loop, LoopId, StopCondition};
 use praxis_runtime::OpenAiClient;
 use serde_json::Value;
@@ -59,6 +59,7 @@ impl Tool for EchoTool {
                 },
                 "required": ["message"]
             }),
+            category: ToolCategory::Generic,
         }
     }
 
@@ -118,14 +119,14 @@ fn parse_tool_arg(input: &str) -> Result<ToolSpec, String> {
         return Err("tool description cannot be empty".into());
     }
 
-    let parameters: Value = serde_json::from_str(params_str).map_err(|e| {
-        format!("invalid JSON schema for tool '{name}': {e}")
-    })?;
+    let parameters: Value = serde_json::from_str(params_str)
+        .map_err(|e| format!("invalid JSON schema for tool '{name}': {e}"))?;
 
     Ok(ToolSpec {
         name: name.to_string(),
         description: description.to_string(),
         parameters,
+        category: ToolCategory::Generic,
     })
 }
 
@@ -167,6 +168,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             system_prompt: "You are a helpful assistant.".into(),
             temperature: None,
             max_tokens: None,
+            scroll_strategy: None,
         },
         tool_set,
     );

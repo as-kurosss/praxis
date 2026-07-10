@@ -126,13 +126,9 @@ impl From<AnthropicError> for LlmError {
     fn from(e: AnthropicError) -> Self {
         match e {
             AnthropicError::Http(msg) => LlmError::Request(msg),
-            AnthropicError::Api { status, body } => {
-                LlmError::Api(format!("HTTP {status}: {body}"))
-            }
+            AnthropicError::Api { status, body } => LlmError::Api(format!("HTTP {status}: {body}")),
             AnthropicError::Parse(msg) => LlmError::Parse(msg),
-            AnthropicError::MissingApiKey => {
-                LlmError::Request("ANTHROPIC_API_KEY not set".into())
-            }
+            AnthropicError::MissingApiKey => LlmError::Request("ANTHROPIC_API_KEY not set".into()),
         }
     }
 }
@@ -370,11 +366,7 @@ fn from_anthropic_response(resp: AnthropicResponse) -> ChatResponse {
         Some(text_parts.join(""))
     };
 
-    let tool_calls = if calls.is_empty() {
-        None
-    } else {
-        Some(calls)
-    };
+    let tool_calls = if calls.is_empty() { None } else { Some(calls) };
 
     let chat_msg = ChatMessage {
         role: Role::Assistant,
@@ -399,7 +391,7 @@ fn from_anthropic_response(resp: AnthropicResponse) -> ChatResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use praxis_core::agent::ToolSpec;
+    use praxis_core::agent::{ToolCategory, ToolSpec};
     use serde_json::json;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -440,7 +432,12 @@ mod tests {
         let msg = ChatMessage::with_tool_calls(vec![tc]);
         let anthropic = to_anthropic_message(&msg);
         assert_eq!(anthropic.role, "assistant");
-        assert!(anthropic.content.iter().any(|b| matches!(b, AnthropicContentBlock::ToolUse { .. })));
+        assert!(
+            anthropic
+                .content
+                .iter()
+                .any(|b| matches!(b, AnthropicContentBlock::ToolUse { .. }))
+        );
     }
 
     #[test]
@@ -449,6 +446,7 @@ mod tests {
             name: "test_tool".into(),
             description: "A test".into(),
             parameters: json!({"type": "object"}),
+            category: ToolCategory::Generic,
         };
         let anthropic_tool = AnthropicTool {
             name: spec.name,
@@ -468,6 +466,7 @@ mod tests {
             name: "echo".into(),
             description: "echo".into(),
             parameters: json!({"type": "object"}),
+            category: ToolCategory::Generic,
         };
         let req = ChatRequest {
             messages: vec![ChatMessage::system("You are"), msg],
@@ -519,7 +518,10 @@ mod tests {
         };
         let client = AnthropicClient::new("http://x", "key", "claude-sonnet-4-20250514");
         let anthropic = client.build_request(&req);
-        assert_eq!(anthropic.system.as_deref(), Some("You are helpful\nBe concise"));
+        assert_eq!(
+            anthropic.system.as_deref(),
+            Some("You are helpful\nBe concise")
+        );
         assert_eq!(anthropic.messages.len(), 1);
     }
 
@@ -607,7 +609,10 @@ mod tests {
         let resp: AnthropicResponse = serde_json::from_value(json).unwrap();
         let result = from_anthropic_response(resp);
 
-        assert_eq!(result.message.content.as_deref(), Some("I'll check the weather:"));
+        assert_eq!(
+            result.message.content.as_deref(),
+            Some("I'll check the weather:")
+        );
         let calls = result.message.tool_calls.unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "get_weather");
@@ -681,7 +686,8 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = AnthropicClient::new(mock_server.uri(), "test-key", "claude-sonnet-4-20250514");
+        let client =
+            AnthropicClient::new(mock_server.uri(), "test-key", "claude-sonnet-4-20250514");
         let req = ChatRequest {
             messages: vec![ChatMessage::user("hello")],
             tools: None,

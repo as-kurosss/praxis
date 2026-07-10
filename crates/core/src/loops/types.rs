@@ -1,7 +1,8 @@
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 /// Unique identifier for a loop instance.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct LoopId(String);
 
 impl LoopId {
@@ -33,7 +34,7 @@ impl std::fmt::Display for LoopId {
 ///
 /// Every loop is classified by one cycle type that determines
 /// how it is triggered, executed, and stopped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CycleType {
     /// Single request → single response (one handler invocation).
     Turn,
@@ -58,7 +59,7 @@ impl CycleType {
 }
 
 /// Why a loop stopped executing.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StopReason {
     /// The goal was achieved (Goal-based).
     GoalMet,
@@ -77,12 +78,35 @@ pub enum StopReason {
 /// At least one limit MUST be set for every loop.
 /// For Turn-based loops, `timeout` is recommended.
 /// For Goal-based loops, both `max_iterations` and `timeout` are required.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StopCondition {
     /// Maximum number of iterations before forced stop.
     pub max_iterations: Option<u32>,
-    /// Maximum wall-clock duration before forced stop.
+    /// Maximum wall-clock duration before forced stop (serialized as milliseconds).
+    #[serde(with = "opt_duration_millis")]
     pub timeout: Option<Duration>,
+}
+
+mod opt_duration_millis {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::time::Duration;
+
+    pub fn serialize<S>(dur: &Option<Duration>, s: S) -> Result<S::Ok, S::Error>
+    where S: Serializer {
+        match dur {
+            Some(d) => {
+                let ms = d.as_millis() as u64;
+                Serialize::serialize(&ms, s)
+            }
+            None => s.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(d: D) -> Result<Option<Duration>, D::Error>
+    where D: Deserializer<'de> {
+        let ms: Option<u64> = Option::deserialize(d)?;
+        Ok(ms.map(Duration::from_millis))
+    }
 }
 
 impl StopCondition {
@@ -119,7 +143,7 @@ impl StopCondition {
 }
 
 /// Runtime status of a loop.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LoopStatus {
     /// Loop is executing or ready to execute.
     Running,

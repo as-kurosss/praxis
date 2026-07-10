@@ -4,6 +4,31 @@
 //! [`ToolError`], and [`ToolSet`] for managing a collection of tools.
 
 use serde_json::Value;
+use std::sync::Arc;
+
+/// Category of a tool for policy and sandbox routing.
+///
+/// Used by [`GovernedTool`](crate::sandbox::GovernedTool) to decide which
+/// policy checks and sandbox routing apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ToolCategory {
+    /// Generic tool with no resource access.
+    Generic,
+    /// Shell command execution.
+    Shell,
+    /// File read operations.
+    FileRead,
+    /// File write operations.
+    FileWrite,
+    /// Network request operations.
+    Network,
+}
+
+impl Default for ToolCategory {
+    fn default() -> Self {
+        Self::Generic
+    }
+}
 
 /// Error type for tool execution.
 #[derive(Debug, thiserror::Error)]
@@ -17,6 +42,9 @@ pub enum ToolError {
     /// Tool execution failed at runtime.
     #[error("Tool '{tool}' execution failed: {message}")]
     Execution { tool: String, message: String },
+    /// Access denied by policy.
+    #[error("Access denied for tool '{tool}': {reason}")]
+    AccessDenied { tool: String, reason: String },
     /// Internal error (wraps any other error).
     #[error(transparent)]
     Internal(#[from] Box<dyn std::error::Error + Send + Sync>),
@@ -33,6 +61,9 @@ pub struct ToolSpec {
     pub description: String,
     /// JSON Schema object describing the expected parameters.
     pub parameters: Value,
+    /// Resource category for policy and sandbox routing.
+    #[serde(default)]
+    pub category: ToolCategory,
 }
 
 /// A capability that an agent can invoke.
@@ -50,9 +81,9 @@ pub trait Tool: Send + Sync {
 /// A managed collection of tools, indexed by name.
 ///
 /// Provides lookup, batch specification, and execution by name.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ToolSet {
-    tools: Vec<Box<dyn Tool>>,
+    tools: Vec<Arc<dyn Tool>>,
 }
 
 impl ToolSet {
@@ -62,15 +93,15 @@ impl ToolSet {
         Self { tools: Vec::new() }
     }
 
-    /// Create a tool set from a pre-built vector of boxed tools.
+    /// Create a tool set from a pre-built vector of tools.
     #[must_use]
-    pub fn from_tools(tools: Vec<Box<dyn Tool>>) -> Self {
+    pub fn from_tools(tools: Vec<Arc<dyn Tool>>) -> Self {
         Self { tools }
     }
 
     /// Add a tool to the set.
     pub fn add<T: Tool + 'static>(&mut self, tool: T) {
-        self.tools.push(Box::new(tool));
+        self.tools.push(Arc::new(tool));
     }
 
     /// Returns the specification of every registered tool.

@@ -522,7 +522,7 @@ where
     I: Loop<Context = C, State = S, Output = O>,
     C: Clone + Send + Sync + 'static,
     S: Clone + Send + Sync + 'static,
-    O: Send + Sync + 'static,
+    O: Clone + std::fmt::Debug + Send + Sync + 'static,
 {
     /// Resume execution from a [`GraphSnapshot`].
     ///
@@ -554,7 +554,7 @@ where
     I: Loop<Context = C, State = S, Output = O>,
     C: Clone + Send + Sync + 'static,
     S: Send + Sync + 'static,
-    O: Send + Sync + 'static,
+    O: Clone + std::fmt::Debug + Send + Sync + 'static,
 {
     type Context = C;
     type State = S;
@@ -571,8 +571,10 @@ where
 
 #[cfg(test)]
 mod tests {
-use super::*;
-    use crate::agent::llm::{ChatMessage, ChatRequest, ChatResponse, LlmClient, LlmError, ToolCall};
+    use super::*;
+    use crate::agent::llm::{
+        ChatMessage, ChatRequest, ChatResponse, LlmClient, LlmError, ToolCall,
+    };
     use crate::agent::{Agent, AgentConfig};
     use crate::loops::{CycleType, LoopId, LoopStatus, StopCondition, TurnLoop};
     use serde::{Deserialize, Serialize};
@@ -976,7 +978,9 @@ use super::*;
     #[async_trait::async_trait]
     impl LlmClient for MockLlm {
         async fn chat(&self, _request: ChatRequest) -> Result<ChatResponse, LlmError> {
-            let idx = self.call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let idx = self
+                .call_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.responses[idx].clone()
         }
     }
@@ -1007,9 +1011,7 @@ use super::*;
         graph.add_end_node(node);
 
         let mut state = Vec::new();
-        let result = graph
-            .execute(make_agent_ctx("Say hello"), &mut state)
-            .await;
+        let result = graph.execute(make_agent_ctx("Say hello"), &mut state).await;
 
         assert!(result.is_success());
         assert_eq!(result.output, Some("Hello from agent!".to_string()));
@@ -1113,8 +1115,7 @@ use super::*;
         let fallback = NodeId::from_id("fallback");
 
         // First agent fails
-        let failing_client =
-            MockLlm::new(vec![Err(LlmError::Request("network error".into()))]);
+        let failing_client = MockLlm::new(vec![Err(LlmError::Request("network error".into()))]);
         let good_response = Ok(ChatResponse {
             message: ChatMessage::assistant("Fallback handled"),
             usage: None,
@@ -1126,10 +1127,7 @@ use super::*;
             MockLlm::new(vec![good_response.clone()]),
             AgentConfig::default(),
         );
-        let fallback_agent = Agent::new(
-            MockLlm::new(vec![good_response]),
-            AgentConfig::default(),
-        );
+        let fallback_agent = Agent::new(MockLlm::new(vec![good_response]), AgentConfig::default());
 
         let mut graph = AgentGraph::new(start.clone());
         graph.add_node(GraphNode::new(start.clone(), fail_agent, "failing-agent"));
@@ -1137,12 +1135,10 @@ use super::*;
         graph.add_node(GraphNode::new(fallback.clone(), fallback_agent, "fallback"));
 
         // If first agent fails → go to fallback; if succeeds → go to success
-        let on_success = Box::new(
-            |r: &LoopResult<String>| r.is_success(),
-        ) as Box<EdgeCondition<String>>;
-        let on_failure = Box::new(
-            |r: &LoopResult<String>| !r.is_success(),
-        ) as Box<EdgeCondition<String>>;
+        let on_success =
+            Box::new(|r: &LoopResult<String>| r.is_success()) as Box<EdgeCondition<String>>;
+        let on_failure =
+            Box::new(|r: &LoopResult<String>| !r.is_success()) as Box<EdgeCondition<String>>;
 
         graph.add_edge(&start, Edge::with_condition(success, on_success));
         graph.add_edge(&start, Edge::with_condition(fallback.clone(), on_failure));

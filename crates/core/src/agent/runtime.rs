@@ -4,13 +4,18 @@
 //! When executed it runs a tool-calling loop:  call LLM → execute tools →
 //! feed results back → repeat until the LLM produces a final text response.
 
-use super::llm::{ChatMessage, ChatRequest, LlmClient};
+use super::llm::{ChatMessage, ChatRequest, LlmClient, StreamChunk};
+use serde::{Deserialize, Serialize};
 use super::tool::ToolSet;
 use crate::loops::{Context, Loop, LoopResult};
+use crate::memory::EpisodicMemory;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::sync::Mutex;
 use std::time::Instant;
 
 /// Configuration for an [`Agent`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     /// Model identifier (e.g. "gpt-4o", "claude-3-5-sonnet").
     pub model: String,
@@ -20,6 +25,11 @@ pub struct AgentConfig {
     pub temperature: Option<f32>,
     /// Maximum tokens in the LLM response (None = provider default).
     pub max_tokens: Option<u32>,
+    /// Scroll strategy for managing conversation history length.
+    /// `None` means no trimming (equivalent to [`ScrollStrategy::NoOp`]).
+    /// Skipped during serialization (closures are not serializable).
+    #[serde(skip)]
+    pub scroll_strategy: Option<super::memory::ScrollStrategy>,
 }
 
 impl Default for AgentConfig {
@@ -29,6 +39,7 @@ impl Default for AgentConfig {
             system_prompt: "You are a helpful assistant.".into(),
             temperature: None,
             max_tokens: None,
+            scroll_strategy: None,
         }
     }
 }
@@ -51,6 +62,8 @@ pub struct Agent<L: LlmClient> {
     client: L,
     config: AgentConfig,
     tools: ToolSet,
+    episodic_memory: Option<Mutex<EpisodicMemory>>,
+    turn_counter: AtomicU64,
 }
 
 impl<L: LlmClient> Agent<L> {
@@ -60,6 +73,8 @@ impl<L: LlmClient> Agent<L> {
             client,
             config,
             tools: ToolSet::new(),
+            episodic_memory: None,
+            turn_counter: AtomicU64::new(0),
         }
     }
 
@@ -69,7 +84,20 @@ impl<L: LlmClient> Agent<L> {
             client,
             config,
             tools,
+            episodic_memory: None,
+            turn_counter: AtomicU64::new(0),
         }
+    }
+
+    /// Attach an episodic memory to this agent for full history recording.
+    pub fn with_episodic_memory(mut self, memory: EpisodicMemory) -> Self {
+        self.episodic_memory = Some(Mutex::new(memory));
+        self
+    }
+
+    /// Reference to the optional episodic memory (for inspection).
+    pub fn episodic_memory(&self) -> Option<&Mutex<EpisodicMemory>> {
+        self.episodic_memory.as_ref()
     }
 
     /// Register a tool that the agent can call.
@@ -81,25 +109,76 @@ impl<L: LlmClient> Agent<L> {
     pub fn tools(&self) -> &ToolSet {
         &self.tools
     }
-}
 
-#[async_trait::async_trait]
-impl<L: LlmClient + 'static> Loop for Agent<L> {
-    type Context = String;
-    type State = Vec<ChatMessage>;
-    type Output = String;
-
-    async fn execute(
+    /// Execute the agent with [`StreamChunk`] output.
+    ///
+    /// Accepts a [`tokio::sync::mpsc::Sender`] that will receive tokens,
+    /// tool call boundaries, and a final `Done` or `Error` chunk.
+    /// Wrap in `tokio::spawn` to run in the background.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+    /// let agent_clone = /* share via Arc or spawn */;
+    /// let result = agent.execute_stream(ctx, &mut state, tx).await;
+    /// ```
+    pub async fn execute_stream(
         &self,
-        ctx: Context<Self::Context>,
-        state: &mut Self::State,
-    ) -> LoopResult<Self::Output> {
+        ctx: Context<String>,
+        state: &mut Vec<ChatMessage>,
+        chunk_sender: tokio::sync::mpsc::Sender<StreamChunk>,
+    ) -> LoopResult<String> {
+        let result = self
+            .execute_impl(ctx, state, Some(chunk_sender.clone()))
+            .await;
+        let _ = chunk_sender.try_send(StreamChunk::Done);
+        result
+    }
+
+    /// Internal execution with optional chunk streaming.
+    async fn execute_impl(
+        &self,
+        ctx: Context<String>,
+        state: &mut Vec<ChatMessage>,
+        chunk_sender: Option<tokio::sync::mpsc::Sender<StreamChunk>>,
+    ) -> LoopResult<String> {
         let start = Instant::now();
         let max_iter = ctx.stop_condition.max_iterations.unwrap_or(25);
         let timeout = ctx.stop_condition.timeout;
 
+        // Helper to send a chunk (best-effort)
+        let send_chunk = |sender: &Option<tokio::sync::mpsc::Sender<StreamChunk>>,
+                          chunk: StreamChunk| {
+            if let Some(tx) = sender {
+                let _ = tx.try_send(chunk);
+            }
+        };
+
         // Add user message to conversation state
+        let input = ctx.input.clone();
         state.push(ChatMessage::user(ctx.input));
+
+        // Apply scroll strategy and record evicted turns in episodic memory
+        if let Some(ref strategy) = self.config.scroll_strategy {
+            let before = state.clone();
+            strategy.apply(state);
+            if before.len() > state.len() {
+                let counter = self.turn_counter.fetch_add(1, Ordering::SeqCst);
+                if let Some(ref episodic_mutex) = self.episodic_memory {
+                    if let Ok(mut episodic) = episodic_mutex.lock() {
+                        let turn_id = format!("turn_{}", counter + 1);
+                        crate::memory::record_evicted_turn(
+                            &mut episodic,
+                            &turn_id,
+                            &input,
+                            &before,
+                            state,
+                        );
+                    }
+                }
+            }
+        }
 
         for iteration in 1..=max_iter {
             // Check graph-level timeout
@@ -107,6 +186,10 @@ impl<L: LlmClient + 'static> Loop for Agent<L> {
                 && start.elapsed() >= limit
             {
                 let elapsed = crate::loops::elapsed_ms(&start);
+                send_chunk(
+                    &chunk_sender,
+                    StreamChunk::Error(format!("timeout after {elapsed}ms")),
+                );
                 return LoopResult::failure(
                     format!("agent timeout after {elapsed}ms"),
                     iteration,
@@ -130,6 +213,7 @@ impl<L: LlmClient + 'static> Loop for Agent<L> {
             let response = match self.client.chat(request).await {
                 Ok(r) => r,
                 Err(e) => {
+                    send_chunk(&chunk_sender, StreamChunk::Error(format!("LLM error: {e}")));
                     return LoopResult::failure(
                         format!("LLM error: {e}"),
                         iteration,
@@ -148,13 +232,24 @@ impl<L: LlmClient + 'static> Loop for Agent<L> {
             state.push(assistant_msg);
 
             if has_tool_calls {
-                // Execute each tool and append results
+                // Emit tool call start chunks
                 let tool_calls = state
                     .last()
                     .and_then(|m| m.tool_calls.as_ref())
                     .cloned()
                     .unwrap_or_default();
 
+                for tc in &tool_calls {
+                    send_chunk(
+                        &chunk_sender,
+                        StreamChunk::ToolCallStart {
+                            id: tc.id.clone(),
+                            name: tc.name.clone(),
+                        },
+                    );
+                }
+
+                // Execute each tool and append results
                 for tc in &tool_calls {
                     let result = self.tools.execute(&tc.name, tc.arguments.clone()).await;
                     match result {
@@ -169,6 +264,18 @@ impl<L: LlmClient + 'static> Loop for Agent<L> {
                         }
                     }
                 }
+
+                // Emit tool call end chunks
+                for tc in &tool_calls {
+                    send_chunk(
+                        &chunk_sender,
+                        StreamChunk::ToolCallEnd { id: tc.id.clone() },
+                    );
+                }
+                // Apply scroll strategy to trim history before next iteration
+                if let Some(ref strategy) = self.config.scroll_strategy {
+                    strategy.apply(state);
+                }
                 // Continue — LLM will see tool results next iteration
             } else {
                 // No tool calls — final text response
@@ -176,11 +283,19 @@ impl<L: LlmClient + 'static> Loop for Agent<L> {
                     .last()
                     .and_then(|m| m.content.clone())
                     .unwrap_or_default();
+
+                // Emit the text content as token chunks
+                send_chunk(&chunk_sender, StreamChunk::Token(text.clone()));
+
                 return LoopResult::success(text, iteration, crate::loops::elapsed_ms(&start));
             }
         }
 
         // Max iterations exceeded
+        send_chunk(
+            &chunk_sender,
+            StreamChunk::Error(format!("max iterations ({max_iter}) exceeded")),
+        );
         LoopResult::failure(
             format!("agent max iterations ({max_iter}) exceeded"),
             max_iter,
@@ -189,11 +304,26 @@ impl<L: LlmClient + 'static> Loop for Agent<L> {
     }
 }
 
+#[async_trait::async_trait]
+impl<L: LlmClient + 'static> Loop for Agent<L> {
+    type Context = String;
+    type State = Vec<ChatMessage>;
+    type Output = String;
+
+    async fn execute(
+        &self,
+        ctx: Context<Self::Context>,
+        state: &mut Self::State,
+    ) -> LoopResult<Self::Output> {
+        self.execute_impl(ctx, state, None).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::agent::llm::{ChatResponse, LlmError, ToolCall};
-    use crate::agent::tool::{Tool, ToolError, ToolSpec};
+    use crate::agent::tool::{Tool, ToolCategory, ToolError, ToolSpec};
     use crate::loops::{CycleType, LoopId, StopCondition};
     use serde_json::json;
     use std::sync::Arc;
@@ -260,6 +390,7 @@ mod tests {
                 name: self.name.clone(),
                 description: "Echoes input".into(),
                 parameters: json!({"type": "object"}),
+                category: ToolCategory::Generic,
             }
         }
 
@@ -279,6 +410,7 @@ mod tests {
                 name: "fail".into(),
                 description: "Always fails".into(),
                 parameters: json!({"type": "object"}),
+                category: ToolCategory::Generic,
             }
         }
 
@@ -344,7 +476,7 @@ mod tests {
         let agent = Agent::with_tools(
             client,
             AgentConfig::default(),
-            ToolSet::from_tools(vec![Box::new(echo.clone())]),
+            ToolSet::from_tools(vec![Arc::new(echo.clone())]),
         );
         let mut state = Vec::new();
         let result = agent.execute(ctx("ping", 5, 30), &mut state).await;
@@ -386,7 +518,7 @@ mod tests {
         let agent = Agent::with_tools(
             client,
             AgentConfig::default(),
-            ToolSet::from_tools(vec![Box::new(echo.clone())]),
+            ToolSet::from_tools(vec![Arc::new(echo.clone())]),
         );
         let mut state = Vec::new();
         let result = agent.execute(ctx("go", 5, 30), &mut state).await;
@@ -420,7 +552,7 @@ mod tests {
         let agent = Agent::with_tools(
             client,
             AgentConfig::default(),
-            ToolSet::from_tools(vec![Box::new(FailTool)]),
+            ToolSet::from_tools(vec![Arc::new(FailTool)]),
         );
         let mut state = Vec::new();
         let result = agent.execute(ctx("do it", 5, 30), &mut state).await;
@@ -521,7 +653,7 @@ mod tests {
         let agent = Agent::with_tools(
             client,
             AgentConfig::default(),
-            ToolSet::from_tools(vec![Box::new(echo)]),
+            ToolSet::from_tools(vec![Arc::new(echo)]),
         );
         let mut state = Vec::new();
         let result = agent.execute(ctx("loop", 2, 30), &mut state).await;
@@ -560,7 +692,7 @@ mod tests {
         let agent = Agent::with_tools(
             client,
             AgentConfig::default(),
-            ToolSet::from_tools(vec![Box::new(echo)]),
+            ToolSet::from_tools(vec![Arc::new(echo)]),
         );
         let mut state = Vec::new();
         let result = agent.execute(ctx("fast", 5, 0), &mut state).await;
@@ -607,5 +739,130 @@ mod tests {
         agent.add_tool(echo);
         assert_eq!(agent.tools().specs().len(), 1);
         assert_eq!(agent.tools().specs()[0].name, "echo");
+    }
+
+    // ── Streaming Tests ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_stream_text_response() {
+        // Agent returns text — stream receives Token then Done.
+        let client = MockLlm::new(vec![Ok(ChatResponse {
+            message: ChatMessage::assistant("Streamed hello"),
+            usage: None,
+        })]);
+        let agent = Agent::new(client, AgentConfig::default());
+        let mut state = Vec::new();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+
+        let result = agent.execute_stream(ctx("hi", 5, 30), &mut state, tx).await;
+
+        assert!(result.is_success());
+        assert_eq!(result.output, Some("Streamed hello".into()));
+
+        // Collect chunks
+        let mut tokens = Vec::new();
+        let mut seen_done = false;
+        while let Some(chunk) = rx.recv().await {
+            match chunk {
+                StreamChunk::Token(t) => tokens.push(t),
+                StreamChunk::Done => {
+                    seen_done = true;
+                    break;
+                }
+                other => panic!("unexpected chunk: {other:?}"),
+            }
+        }
+        assert_eq!(tokens, vec!["Streamed hello"]);
+        assert!(seen_done);
+    }
+
+    #[tokio::test]
+    async fn test_stream_tool_call() {
+        // Agent does one tool call then text — stream sends ToolCallStart/End + Token + Done.
+        let tool_call = ToolCall {
+            id: "c1".into(),
+            name: "echo".into(),
+            arguments: json!("ping"),
+        };
+        let client = MockLlm::new(vec![
+            Ok(ChatResponse {
+                message: ChatMessage::with_tool_calls(vec![tool_call]),
+                usage: None,
+            }),
+            Ok(ChatResponse {
+                message: ChatMessage::assistant("done"),
+                usage: None,
+            }),
+        ]);
+
+        let echo = EchoTool::new("echo");
+        let agent = Agent::with_tools(
+            client,
+            AgentConfig::default(),
+            ToolSet::from_tools(vec![Arc::new(echo)]),
+        );
+        let mut state = Vec::new();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+
+        let result = agent
+            .execute_stream(ctx("ping", 5, 30), &mut state, tx)
+            .await;
+
+        assert!(result.is_success());
+        assert_eq!(result.output, Some("done".into()));
+
+        let mut chunks = Vec::new();
+        while let Some(chunk) = rx.recv().await {
+            match &chunk {
+                StreamChunk::Done => {
+                    chunks.push(chunk);
+                    break;
+                }
+                _ => chunks.push(chunk),
+            }
+        }
+
+        // Should have: ToolCallStart, ToolCallEnd, Token, Done
+        assert!(
+            chunks
+                .iter()
+                .any(|c| matches!(c, StreamChunk::ToolCallStart { .. }))
+        );
+        assert!(
+            chunks
+                .iter()
+                .any(|c| matches!(c, StreamChunk::ToolCallEnd { .. }))
+        );
+        assert!(
+            chunks
+                .iter()
+                .any(|c| matches!(c, StreamChunk::Token(t) if t == "done"))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_stream_llm_error() {
+        // Agent gets LLM error — stream sends Error then Done.
+        let client = MockLlm::new(vec![Err(LlmError::Request("stream crash".into()))]);
+        let agent = Agent::new(client, AgentConfig::default());
+        let mut state = Vec::new();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+
+        let result = agent.execute_stream(ctx("go", 5, 30), &mut state, tx).await;
+
+        assert!(!result.is_success());
+
+        let mut chunks = Vec::new();
+        while let Some(chunk) = rx.recv().await {
+            match &chunk {
+                StreamChunk::Done => {
+                    chunks.push(chunk);
+                    break;
+                }
+                _ => chunks.push(chunk),
+            }
+        }
+        // Should have at least an Error chunk
+        assert!(chunks.iter().any(|c| matches!(c, StreamChunk::Error(_))));
     }
 }

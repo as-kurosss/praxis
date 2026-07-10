@@ -170,6 +170,32 @@ impl Clone for LlmError {
     }
 }
 
+/// A single chunk produced during a streaming agent execution.
+///
+/// Stream chunks are emitted by [`Agent::execute_stream`](crate::agent::runtime::Agent::execute_stream)
+/// and represent the agent's progress at the token/tool level.
+#[derive(Debug, Clone)]
+pub enum StreamChunk {
+    /// A text token from the LLM.
+    Token(String),
+    /// A tool call has started.
+    ToolCallStart {
+        /// Tool call ID.
+        id: String,
+        /// Tool name.
+        name: String,
+    },
+    /// A tool call has completed.
+    ToolCallEnd {
+        /// Tool call ID.
+        id: String,
+    },
+    /// The agent execution finished successfully.
+    Done,
+    /// The agent execution encountered an error.
+    Error(String),
+}
+
 /// Abstract LLM client.
 ///
 /// Implement this trait for any LLM provider (e.g. `OpenAI`, `Anthropic`).
@@ -177,4 +203,20 @@ impl Clone for LlmError {
 pub trait LlmClient: Send + Sync {
     /// Send a chat request and receive a response.
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, LlmError>;
+
+    /// Send a chat request and receive a stream of response chunks.
+    ///
+    /// The default implementation returns an error indicating streaming
+    /// is not supported by this client.  Override this to provide
+    /// token-level streaming from your LLM provider.
+    ///
+    /// Each `Receiver<StreamChunk>` contains the full sequence of
+    /// tokens, tool call boundaries, and a terminal `StreamChunk::Done`
+    /// or `StreamChunk::Error`.
+    async fn chat_stream(
+        &self,
+        _request: ChatRequest,
+    ) -> Result<tokio::sync::mpsc::Receiver<StreamChunk>, LlmError> {
+        Err(LlmError::Request("streaming not supported".into()))
+    }
 }

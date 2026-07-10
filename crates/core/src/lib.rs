@@ -7,6 +7,12 @@ pub mod agent;
 pub mod cycle;
 pub mod error;
 pub mod loops;
+pub mod memory;
+pub mod orchestration;
+pub mod persistence;
+pub mod sandbox;
+pub mod scheduler;
+pub mod tools;
 
 pub use error::Error;
 pub use error::Result;

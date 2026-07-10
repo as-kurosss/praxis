@@ -11,3 +11,8 @@ thiserror.workspace = true
 tokio.workspace = true
 uuid.workspace = true
 async-trait.workspace = true
+cron = "0.13"
+chrono = "0.4"
+
+[dev-dependencies]
+tempfile = "3"

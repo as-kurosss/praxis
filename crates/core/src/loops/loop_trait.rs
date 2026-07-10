@@ -1,11 +1,12 @@
 use super::types::{CycleType, LoopId, LoopStatus, StopCondition, StopReason};
+use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
 /// Execution context passed into a loop.
 ///
 /// Contains the loop identity, cycle classification, hard limits,
 /// and the domain-specific input payload.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Context<C> {
     /// Unique loop identifier.
     pub id: LoopId,
@@ -30,7 +31,7 @@ impl<C> Context<C> {
 }
 
 /// Result produced by a single loop execution.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoopResult<O> {
     /// Domain-specific output payload. `None` when the loop failed.
     pub output: Option<O>,
