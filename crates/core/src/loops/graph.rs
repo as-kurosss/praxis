@@ -8,6 +8,7 @@
 //! The graph itself implements [`Loop`], so graphs can be nested.
 
 use super::loop_trait::{Context, Loop, LoopResult, elapsed_ms};
+use super::types::LoopStatus;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -165,6 +166,54 @@ pub struct NodeDescriptor {
     pub label: String,
 }
 
+/// Graph lifecycle event emitted during graph execution.
+///
+/// Observers receive these events via [`Graph::on_event`] and can use them
+/// for logging, metrics, tracing, or any other observability purpose.
+#[derive(Debug, Clone)]
+pub enum GraphEvent<O> {
+    /// A node is about to execute.
+    NodeStarted {
+        /// Unique identifier of the node.
+        node_id: NodeId,
+        /// Human-readable label of the node.
+        node_label: String,
+    },
+    /// A node completed successfully.
+    NodeCompleted {
+        /// Unique identifier of the node.
+        node_id: NodeId,
+        /// Human-readable label of the node.
+        node_label: String,
+        /// The result produced by the node.
+        result: LoopResult<O>,
+    },
+    /// A node failed.
+    NodeFailed {
+        /// Unique identifier of the node.
+        node_id: NodeId,
+        /// Human-readable label of the node.
+        node_label: String,
+        /// Error description.
+        error: String,
+    },
+    /// The graph completed successfully.
+    GraphCompleted {
+        /// The final result of the graph.
+        result: LoopResult<O>,
+    },
+    /// The graph failed.
+    GraphFailed {
+        /// Error description.
+        error: String,
+        /// Number of iterations completed before failure.
+        iterations: u32,
+    },
+}
+
+/// Type alias for graph event handler functions.
+pub type GraphEventHandler<O> = dyn Fn(&GraphEvent<O>) + Send + Sync;
+
 /// A **State Graph** — directed execution graph that composes `Loop` primitives.
 ///
 /// The graph itself implements [`Loop`], so it can be used anywhere a loop is
@@ -185,6 +234,7 @@ where
     adjacency: HashMap<NodeId, Vec<Edge<O>>>,
     start_node: NodeId,
     end_nodes: HashSet<NodeId>,
+    observers: Vec<Box<GraphEventHandler<O>>>,
     _phantom: std::marker::PhantomData<(C, S, O)>,
 }
 
@@ -203,6 +253,7 @@ where
             adjacency: HashMap::new(),
             start_node,
             end_nodes: HashSet::new(),
+            observers: Vec::new(),
             _phantom: std::marker::PhantomData,
         }
     }
@@ -283,6 +334,22 @@ where
             state: state.clone(),
         }
     }
+
+    /// Register an event handler that is called on every graph lifecycle event.
+    ///
+    /// Handlers receive a reference to each [`GraphEvent`] as it occurs during
+    /// graph execution. Multiple handlers can be registered and will be called
+    /// in insertion order.
+    pub fn on_event<F: Fn(&GraphEvent<O>) + Send + Sync + 'static>(&mut self, handler: F) {
+        self.observers.push(Box::new(handler));
+    }
+
+    /// Emit a graph event to all registered observers.
+    fn emit_event(&self, event: GraphEvent<O>) {
+        for handler in &self.observers {
+            handler(&event);
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -291,7 +358,7 @@ where
     I: Loop<Context = C, State = S, Output = O>,
     C: Clone + Send + Sync + 'static,
     S: Send + Sync + 'static,
-    O: Send + Sync + 'static,
+    O: Clone + std::fmt::Debug + Send + Sync + 'static,
 {
     type Context = C;
     type State = S;
@@ -314,24 +381,40 @@ where
                 && start.elapsed() >= limit
             {
                 let elapsed = elapsed_ms(&start);
-                return LoopResult::failure(
+                let result = LoopResult::failure(
                     format!("graph timeout after {elapsed}ms"),
                     iteration,
                     elapsed,
                 );
+                self.emit_event(GraphEvent::GraphFailed {
+                    error: format!("graph timeout after {elapsed}ms"),
+                    iterations: iteration,
+                });
+                return result;
             }
 
             // Look up current node
             let node = match self.nodes.get(&current) {
                 Some(n) => n,
                 None => {
-                    return LoopResult::failure(
+                    let result = LoopResult::failure(
                         format!("graph node not found: {current}"),
                         iteration,
                         elapsed_ms(&start),
                     );
+                    self.emit_event(GraphEvent::GraphFailed {
+                        error: format!("graph node not found: {current}"),
+                        iterations: iteration,
+                    });
+                    return result;
                 }
             };
+
+            // Emit NodeStarted before executing the node
+            self.emit_event(GraphEvent::NodeStarted {
+                node_id: node.id.clone(),
+                node_label: node.label.clone(),
+            });
 
             // Execute the node's loop
             let result = node.inner.execute(ctx.clone(), state).await;
@@ -356,7 +439,40 @@ where
                 duration_ms: elapsed_ms(&start),
             };
 
+            // Emit NodeCompleted or NodeFailed based on outcome
+            if node_success {
+                self.emit_event(GraphEvent::NodeCompleted {
+                    node_id: node.id.clone(),
+                    node_label: node.label.clone(),
+                    result: graph_result.clone(),
+                });
+            } else {
+                let error = match &graph_result.status {
+                    LoopStatus::Failed(msg) => msg.clone(),
+                    _ => "node failed".to_string(),
+                };
+                self.emit_event(GraphEvent::NodeFailed {
+                    node_id: node.id.clone(),
+                    node_label: node.label.clone(),
+                    error,
+                });
+            }
+
             if is_end_node {
+                if node_success {
+                    self.emit_event(GraphEvent::GraphCompleted {
+                        result: graph_result.clone(),
+                    });
+                } else {
+                    let error = match &graph_result.status {
+                        LoopStatus::Failed(msg) => msg.clone(),
+                        _ => "unknown error".to_string(),
+                    };
+                    self.emit_event(GraphEvent::GraphFailed {
+                        error,
+                        iterations: iteration,
+                    });
+                }
                 return graph_result;
             }
 
@@ -365,24 +481,42 @@ where
                 None => {
                     if !node_success {
                         // Node failed — propagate failure
+                        let error = match &graph_result.status {
+                            LoopStatus::Failed(msg) => msg.clone(),
+                            _ => "unknown error".to_string(),
+                        };
+                        self.emit_event(GraphEvent::GraphFailed {
+                            error,
+                            iterations: iteration,
+                        });
                         return graph_result;
                     }
                     // Node succeeded but no edge matches — routing error
-                    return LoopResult::failure(
+                    let result = LoopResult::failure(
                         format!("no matching edge from node '{current}'"),
                         iteration,
                         elapsed_ms(&start),
                     );
+                    self.emit_event(GraphEvent::GraphFailed {
+                        error: format!("no matching edge from node '{current}'"),
+                        iterations: iteration,
+                    });
+                    return result;
                 }
             }
         }
 
         // Max iterations exhausted
-        LoopResult::failure(
+        let result = LoopResult::failure(
             format!("graph max iterations ({max_iter}) exceeded"),
             max_iter,
             elapsed_ms(&start),
-        )
+        );
+        self.emit_event(GraphEvent::GraphFailed {
+            error: format!("graph max iterations ({max_iter}) exceeded"),
+            iterations: max_iter,
+        });
+        result
     }
 }
 
@@ -974,5 +1108,37 @@ use super::*;
         assert!(result.is_success());
         assert_eq!(result.output, Some("Fallback handled".to_string()));
         assert_eq!(result.iterations, 2);
+    }
+
+    // ── Observability events ────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_graph_observability_events() {
+        let start = NodeId::from_id("n1");
+        let mut graph = Graph::new(start.clone());
+        graph.add_node(GraphNode::new(start.clone(), echo_loop(), "echo"));
+        graph.add_end_node(start.clone());
+
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+        graph.on_event(move |event| {
+            let label = match event {
+                GraphEvent::NodeStarted { .. } => "NodeStarted",
+                GraphEvent::NodeCompleted { .. } => "NodeCompleted",
+                GraphEvent::NodeFailed { .. } => "NodeFailed",
+                GraphEvent::GraphCompleted { .. } => "GraphCompleted",
+                GraphEvent::GraphFailed { .. } => "GraphFailed",
+            };
+            events_clone.lock().unwrap().push(label.to_string());
+        });
+
+        let result = run_graph(&graph, "hello", 10).await;
+        assert!(result.is_success());
+
+        let event_names = events.lock().unwrap();
+        assert_eq!(event_names.len(), 3);
+        assert_eq!(event_names[0], "NodeStarted");
+        assert_eq!(event_names[1], "NodeCompleted");
+        assert_eq!(event_names[2], "GraphCompleted");
     }
 }
