@@ -7,5 +7,7 @@ license.workspace = true
 [dependencies]
 praxis-core = { path = "../core" }
 praxis-runtime = { path = "../runtime" }
+async-trait.workspace = true
 clap.workspace = true
+serde_json.workspace = true
 tokio.workspace = true

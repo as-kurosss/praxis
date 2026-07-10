@@ -906,9 +906,11 @@ dependencies = [
 name = "praxis"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "clap",
  "praxis-core",
  "praxis-runtime",
+ "serde_json",
  "tokio",
 ]
 
