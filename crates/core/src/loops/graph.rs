@@ -388,9 +388,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+use super::*;
+    use crate::agent::llm::{ChatMessage, ChatRequest, ChatResponse, LlmClient, LlmError, ToolCall};
+    use crate::agent::{Agent, AgentConfig};
     use crate::loops::{CycleType, LoopId, LoopStatus, StopCondition, TurnLoop};
     use serde::{Deserialize, Serialize};
+    use serde_json::json;
 
     /// Helper: create a `TurnLoop` that echoes input.
     fn echo_loop() -> TurnLoop<String, String> {
@@ -768,5 +771,208 @@ mod tests {
         assert_eq!(restored.current_node, b);
         // Verify the snapshot data survives a full JSON round-trip
         assert_eq!(restored.state, ());
+    }
+
+    // ── Agent as a graph node ───────────────────────────────────
+
+    /// Mock LLM for testing Agent inside a Graph.
+    struct MockLlm {
+        responses: Vec<Result<ChatResponse, LlmError>>,
+        call_count: std::sync::atomic::AtomicUsize,
+    }
+
+    impl MockLlm {
+        fn new(responses: Vec<Result<ChatResponse, LlmError>>) -> Self {
+            Self {
+                responses,
+                call_count: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LlmClient for MockLlm {
+        async fn chat(&self, _request: ChatRequest) -> Result<ChatResponse, LlmError> {
+            let idx = self.call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.responses[idx].clone()
+        }
+    }
+
+    fn make_agent_ctx(input: &str) -> Context<String> {
+        Context::new(
+            LoopId::new(),
+            CycleType::Turn,
+            StopCondition::new(Some(25), Some(std::time::Duration::from_secs(30))),
+            input.to_string(),
+        )
+    }
+
+    #[tokio::test]
+    async fn test_graph_agent_single_node() {
+        // Agent that returns a plain text response.
+        type AgentGraph = Graph<Agent<MockLlm>, String, Vec<ChatMessage>, String>;
+
+        let node = NodeId::from_id("agent");
+        let client = MockLlm::new(vec![Ok(ChatResponse {
+            message: ChatMessage::assistant("Hello from agent!"),
+            usage: None,
+        })]);
+        let agent = Agent::new(client, AgentConfig::default());
+
+        let mut graph = AgentGraph::new(node.clone());
+        graph.add_node(GraphNode::new(node.clone(), agent, "my-agent"));
+        graph.add_end_node(node);
+
+        let mut state = Vec::new();
+        let result = graph
+            .execute(make_agent_ctx("Say hello"), &mut state)
+            .await;
+
+        assert!(result.is_success());
+        assert_eq!(result.output, Some("Hello from agent!".to_string()));
+        assert_eq!(result.iterations, 1);
+        // State: [user("Say hello"), assistant("Hello from agent!")]
+        assert_eq!(state.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_graph_agent_tool_call_then_text() {
+        // Agent first calls a tool, then responds with text.
+        type AgentGraph = Graph<Agent<MockLlm>, String, Vec<ChatMessage>, String>;
+
+        let tc = ToolCall {
+            id: "call_1".into(),
+            name: "echo".into(),
+            arguments: json!({"msg": "ping"}),
+        };
+
+        let client = MockLlm::new(vec![
+            Ok(ChatResponse {
+                message: ChatMessage::with_tool_calls(vec![tc]),
+                usage: None,
+            }),
+            Ok(ChatResponse {
+                message: ChatMessage::assistant("Tool executed!"),
+                usage: None,
+            }),
+        ]);
+
+        let node = NodeId::from_id("agent");
+        let agent = Agent::new(client, AgentConfig::default());
+
+        let mut graph = AgentGraph::new(node.clone());
+        graph.add_node(GraphNode::new(node.clone(), agent, "tool-agent"));
+        graph.add_end_node(node);
+
+        let mut state = Vec::new();
+        let result = graph
+            .execute(make_agent_ctx("Use a tool"), &mut state)
+            .await;
+
+        assert!(result.is_success());
+        assert_eq!(result.output, Some("Tool executed!".to_string()));
+        // Agent handles tool call loop internally, so 1 graph iteration
+        assert_eq!(result.iterations, 1);
+        // State: [user, assistant(tool_call), tool_result, assistant(text)]
+        assert_eq!(state.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_graph_two_agents_chain() {
+        // Two Agent nodes in sequence: first adds user message, second sees it.
+        type AgentGraph = Graph<Agent<MockLlm>, String, Vec<ChatMessage>, String>;
+
+        let a = NodeId::from_id("agent-a");
+        let b = NodeId::from_id("agent-b");
+
+        let client_a = MockLlm::new(vec![Ok(ChatResponse {
+            message: ChatMessage::assistant("Response from A"),
+            usage: None,
+        })]);
+        let client_b = MockLlm::new(vec![Ok(ChatResponse {
+            message: ChatMessage::assistant("Response from B"),
+            usage: None,
+        })]);
+
+        // Agent A and B are separate instances sharing one state vec
+        let agent_a = Agent::new(client_a, AgentConfig::default());
+        let agent_b = Agent::new(client_b, AgentConfig::default());
+
+        let mut graph = AgentGraph::new(a.clone());
+        graph.add_node(GraphNode::new(a.clone(), agent_a, "agent-a"));
+        graph.add_node(GraphNode::new(b.clone(), agent_b, "agent-b"));
+        graph.add_edge(&a, Edge::new(b.clone()));
+        graph.add_end_node(b);
+
+        let mut state = Vec::new();
+        let result = graph
+            .execute(make_agent_ctx("Process this"), &mut state)
+            .await;
+
+        assert!(result.is_success());
+        assert_eq!(result.output, Some("Response from B".to_string()));
+        assert_eq!(result.iterations, 2);
+        // State accumulates across both agents
+        // [user, assistant-A, user, assistant-B]
+        assert_eq!(state.len(), 4);
+        // Both agents' responses are in the conversation
+        assert!(state[1].content.as_deref() == Some("Response from A"));
+        assert!(state[3].content.as_deref() == Some("Response from B"));
+    }
+
+    #[tokio::test]
+    async fn test_graph_agent_with_conditional_routing() {
+        // Route to success or fallback agent based on previous agent's outcome.
+        type AgentGraph = Graph<Agent<MockLlm>, String, Vec<ChatMessage>, String>;
+
+        let start = NodeId::from_id("start");
+        let success = NodeId::from_id("success");
+        let fallback = NodeId::from_id("fallback");
+
+        // First agent fails
+        let failing_client =
+            MockLlm::new(vec![Err(LlmError::Request("network error".into()))]);
+        let good_response = Ok(ChatResponse {
+            message: ChatMessage::assistant("Fallback handled"),
+            usage: None,
+        });
+
+        let fail_agent = Agent::new(failing_client, AgentConfig::default());
+        // Separate agent instances (Agent doesn't impl Clone)
+        let success_agent = Agent::new(
+            MockLlm::new(vec![good_response.clone()]),
+            AgentConfig::default(),
+        );
+        let fallback_agent = Agent::new(
+            MockLlm::new(vec![good_response]),
+            AgentConfig::default(),
+        );
+
+        let mut graph = AgentGraph::new(start.clone());
+        graph.add_node(GraphNode::new(start.clone(), fail_agent, "failing-agent"));
+        graph.add_node(GraphNode::new(success.clone(), success_agent, "success"));
+        graph.add_node(GraphNode::new(fallback.clone(), fallback_agent, "fallback"));
+
+        // If first agent fails → go to fallback; if succeeds → go to success
+        let on_success = Box::new(
+            |r: &LoopResult<String>| r.is_success(),
+        ) as Box<EdgeCondition<String>>;
+        let on_failure = Box::new(
+            |r: &LoopResult<String>| !r.is_success(),
+        ) as Box<EdgeCondition<String>>;
+
+        graph.add_edge(&start, Edge::with_condition(success, on_success));
+        graph.add_edge(&start, Edge::with_condition(fallback.clone(), on_failure));
+        graph.add_end_node(fallback);
+
+        let mut state = Vec::new();
+        let result = graph
+            .execute(make_agent_ctx("Do something risky"), &mut state)
+            .await;
+
+        // First agent fails → routes to fallback → fallback succeeds
+        assert!(result.is_success());
+        assert_eq!(result.output, Some("Fallback handled".to_string()));
+        assert_eq!(result.iterations, 2);
     }
 }
