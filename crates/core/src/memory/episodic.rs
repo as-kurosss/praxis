@@ -197,7 +197,7 @@ impl EpisodicMemory {
     }
 
     /// Remove a single entry and its index entries.
-    fn remove_entry(&mut self, turn_id: &str) {
+    pub(crate) fn remove_entry(&mut self, turn_id: &str) {
         if let Some(entry) = self.store.remove(turn_id) {
             for kw in &entry.keywords {
                 if let Some(ids) = self.index.get_mut(kw) {

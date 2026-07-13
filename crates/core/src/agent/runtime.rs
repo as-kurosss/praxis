@@ -4,10 +4,10 @@
 //! When executed it runs a tool-calling loop:  call LLM → execute tools →
 //! feed results back → repeat until the LLM produces a final text response.
 
-use super::llm::{ChatMessage, ChatRequest, LlmClient, StreamChunk, ToolCall};
+use super::llm::{ChatMessage, ChatRequest, LlmClient, Role, StreamChunk, ToolCall};
 use super::tool::ToolSet;
 use crate::loops::{Context, Loop, LoopResult};
-use crate::memory::EpisodicMemory;
+use crate::memory::{EpisodicMemory, OnTurnEnd};
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use std::sync::atomic::AtomicU64;
@@ -64,6 +64,7 @@ pub struct Agent<L: LlmClient> {
     tools: ToolSet,
     episodic_memory: Option<Mutex<EpisodicMemory>>,
     turn_counter: AtomicU64,
+    on_turn_end: Option<OnTurnEnd>,
 }
 
 impl<L: LlmClient> Agent<L> {
@@ -75,6 +76,7 @@ impl<L: LlmClient> Agent<L> {
             tools: ToolSet::new(),
             episodic_memory: None,
             turn_counter: AtomicU64::new(0),
+            on_turn_end: None,
         }
     }
 
@@ -86,6 +88,7 @@ impl<L: LlmClient> Agent<L> {
             tools,
             episodic_memory: None,
             turn_counter: AtomicU64::new(0),
+            on_turn_end: None,
         }
     }
 
@@ -108,6 +111,19 @@ impl<L: LlmClient> Agent<L> {
     /// Reference to the tool set.
     pub fn tools(&self) -> &ToolSet {
         &self.tools
+    }
+
+    /// Attach an `on_turn_end` callback that fires after each successful turn.
+    ///
+    /// The callback receives `(turn_id, user_input, messages_for_this_turn)`.
+    pub fn with_on_turn_end(mut self, hook: OnTurnEnd) -> Self {
+        self.on_turn_end = Some(hook);
+        self
+    }
+
+    /// Register or replace the `on_turn_end` callback.
+    pub fn set_on_turn_end(&mut self, hook: OnTurnEnd) {
+        self.on_turn_end = Some(hook);
     }
 
     /// Execute the agent with [`StreamChunk`] output.
@@ -509,7 +525,21 @@ impl<L: LlmClient + 'static> Loop for Agent<L> {
         ctx: Context<Self::Context>,
         state: &mut Self::State,
     ) -> LoopResult<Self::Output> {
-        self.execute_impl(ctx, state, None).await
+        let result = self.execute_impl(ctx, state, None).await;
+
+        // Fire on_turn_end hook after the turn completes
+        if let Some(ref hook) = self.on_turn_end {
+            if let Some(user_msg) = state.iter().find(|m| m.role == Role::User) {
+                let input = user_msg.content.as_deref().unwrap_or("");
+                let turn_id = format!(
+                    "turn_{}",
+                    self.turn_counter.load(std::sync::atomic::Ordering::SeqCst)
+                );
+                hook(&turn_id, input, state);
+            }
+        }
+
+        result
     }
 }
 

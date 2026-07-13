@@ -44,10 +44,12 @@
 //! // }
 //! ```
 
+mod memory_dream;
 mod persist;
 mod schedule;
 mod task;
 
+pub use memory_dream::{MemoryDreamInput, MemoryDreamLoop, MemoryDreamOutput, default_summarizer};
 pub use persist::{PersistError, PersistentScheduler, TaskFactory};
 pub use schedule::Schedule;
 pub use task::{AnyTask, ScheduledTask, Scheduler, SchedulerEvent, TaskId};
