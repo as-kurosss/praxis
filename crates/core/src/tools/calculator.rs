@@ -4,7 +4,7 @@
 //! common functions (`sqrt`, `abs`, `round`, `min`, `max`).
 
 use crate::agent::tool::{Tool, ToolError, ToolSpec};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// A tool that evaluates mathematical expressions safely.
 ///
@@ -291,44 +291,66 @@ fn parse_atom(tokens: &[Token], pos: &mut usize) -> Result<f64, ToolError> {
 fn apply_function(name: &str, args: &[f64]) -> Result<f64, ToolError> {
     let err = || ToolError::InvalidArgs {
         tool: "calculator".into(),
-        message: format!("function '{name}' expects {} arguments, got {}", expected(name), args.len()),
+        message: format!(
+            "function '{name}' expects {} arguments, got {}",
+            expected(name),
+            args.len()
+        ),
     };
 
     match name {
         "sqrt" => {
-            if args.len() != 1 { return Err(err()); }
+            if args.len() != 1 {
+                return Err(err());
+            }
             Ok(args[0].sqrt())
         }
         "abs" => {
-            if args.len() != 1 { return Err(err()); }
+            if args.len() != 1 {
+                return Err(err());
+            }
             Ok(args[0].abs())
         }
         "round" => {
-            if args.len() != 1 { return Err(err()); }
+            if args.len() != 1 {
+                return Err(err());
+            }
             Ok(args[0].round())
         }
         "min" => {
-            if args.len() != 2 { return Err(err()); }
+            if args.len() != 2 {
+                return Err(err());
+            }
             Ok(args[0].min(args[1]))
         }
         "max" => {
-            if args.len() != 2 { return Err(err()); }
+            if args.len() != 2 {
+                return Err(err());
+            }
             Ok(args[0].max(args[1]))
         }
         "sin" => {
-            if args.len() != 1 { return Err(err()); }
+            if args.len() != 1 {
+                return Err(err());
+            }
             Ok(args[0].sin())
         }
         "cos" => {
-            if args.len() != 1 { return Err(err()); }
+            if args.len() != 1 {
+                return Err(err());
+            }
             Ok(args[0].cos())
         }
         "ceil" => {
-            if args.len() != 1 { return Err(err()); }
+            if args.len() != 1 {
+                return Err(err());
+            }
             Ok(args[0].ceil())
         }
         "floor" => {
-            if args.len() != 1 { return Err(err()); }
+            if args.len() != 1 {
+                return Err(err());
+            }
             Ok(args[0].floor())
         }
         _ => Err(ToolError::InvalidArgs {

@@ -17,7 +17,8 @@ use std::time::Duration;
 #[async_trait::async_trait]
 pub trait Sandbox: Send + Sync + std::fmt::Debug {
     /// Execute a shell command and return its output.
-    async fn execute_shell(&self, command: &str, timeout: Duration) -> SandboxResult<SandboxOutput>;
+    async fn execute_shell(&self, command: &str, timeout: Duration)
+    -> SandboxResult<SandboxOutput>;
 
     /// Read a file's contents as bytes.
     async fn read_file(&self, path: &Path) -> SandboxResult<Vec<u8>>;
@@ -54,20 +55,20 @@ impl Default for DirectSandbox {
 
 #[async_trait::async_trait]
 impl Sandbox for DirectSandbox {
-    async fn execute_shell(&self, command: &str, timeout: Duration) -> SandboxResult<SandboxOutput> {
+    async fn execute_shell(
+        &self,
+        command: &str,
+        timeout: Duration,
+    ) -> SandboxResult<SandboxOutput> {
         tokio::time::timeout(timeout, async {
-            let output = tokio::process::Command::new(if cfg!(windows) {
-                "cmd"
-            } else {
-                "sh"
-            })
-            .arg(if cfg!(windows) { "/C" } else { "-c" })
-            .arg(command)
-            .output()
-            .await
-            .map_err(|e| SandboxError::ExecutionFailed {
-                detail: format!("failed to execute command: {e}"),
-            })?;
+            let output = tokio::process::Command::new(if cfg!(windows) { "cmd" } else { "sh" })
+                .arg(if cfg!(windows) { "/C" } else { "-c" })
+                .arg(command)
+                .output()
+                .await
+                .map_err(|e| SandboxError::ExecutionFailed {
+                    detail: format!("failed to execute command: {e}"),
+                })?;
 
             Ok(SandboxOutput {
                 stdout: String::from_utf8_lossy(&output.stdout).to_string(),
@@ -113,7 +114,11 @@ pub struct NullSandbox;
 
 #[async_trait::async_trait]
 impl Sandbox for NullSandbox {
-    async fn execute_shell(&self, _command: &str, _timeout: Duration) -> SandboxResult<SandboxOutput> {
+    async fn execute_shell(
+        &self,
+        _command: &str,
+        _timeout: Duration,
+    ) -> SandboxResult<SandboxOutput> {
         Err(SandboxError::Unsupported {
             operation: "shell".into(),
         })
@@ -145,7 +150,10 @@ mod tests {
         let s = NullSandbox;
         let result = s.execute_shell("echo hi", Duration::from_secs(5)).await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), SandboxError::Unsupported { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            SandboxError::Unsupported { .. }
+        ));
 
         assert!(s.read_file(Path::new("/tmp/x")).await.is_err());
         assert!(s.write_file(Path::new("/tmp/x"), b"data").await.is_err());

@@ -424,9 +424,8 @@ mod tests {
 
     #[test]
     fn test_summarize_under_limit() {
-        let summarizer = Arc::new(|msgs: &[ChatMessage]| {
-            format!("summarized {} messages", msgs.len())
-        });
+        let summarizer =
+            Arc::new(|msgs: &[ChatMessage]| format!("summarized {} messages", msgs.len()));
         let strategy = ScrollStrategy::Summarize {
             max_messages: 10,
             summarizer,
@@ -438,9 +437,8 @@ mod tests {
 
     #[test]
     fn test_summarize_over_limit() {
-        let summarizer = Arc::new(|msgs: &[ChatMessage]| {
-            format!("summarized {} messages", msgs.len())
-        });
+        let summarizer =
+            Arc::new(|msgs: &[ChatMessage]| format!("summarized {} messages", msgs.len()));
         let strategy = ScrollStrategy::Summarize {
             max_messages: 4,
             summarizer,
@@ -457,16 +455,21 @@ mod tests {
         // Should keep: sys + summary + 2 recent = 4
         assert_eq!(msgs.len(), 4);
         assert_eq!(msgs[0].content.as_deref(), Some("s1"));
-        assert!(msgs[1].content.as_deref().unwrap().contains("summarized 3 messages"));
+        assert!(
+            msgs[1]
+                .content
+                .as_deref()
+                .unwrap()
+                .contains("summarized 3 messages")
+        );
         assert_eq!(msgs[2].content.as_deref(), Some("a2"));
         assert_eq!(msgs[3].content.as_deref(), Some("u3"));
     }
 
     #[test]
     fn test_summarize_fallback_to_truncate_when_no_old_messages() {
-        let summarizer = Arc::new(|msgs: &[ChatMessage]| {
-            format!("summarized {} messages", msgs.len())
-        });
+        let summarizer =
+            Arc::new(|msgs: &[ChatMessage]| format!("summarized {} messages", msgs.len()));
         let strategy = ScrollStrategy::Summarize {
             max_messages: 3,
             summarizer,
@@ -479,9 +482,8 @@ mod tests {
 
     #[test]
     fn test_summarize_only_system_messages() {
-        let summarizer = Arc::new(|msgs: &[ChatMessage]| {
-            format!("summarized {} messages", msgs.len())
-        });
+        let summarizer =
+            Arc::new(|msgs: &[ChatMessage]| format!("summarized {} messages", msgs.len()));
         let strategy = ScrollStrategy::Summarize {
             max_messages: 2,
             summarizer,
@@ -518,7 +520,13 @@ mod tests {
         // sys + summary + 1 recent = 3
         assert_eq!(msgs.len(), 3);
         assert_eq!(msgs[0].content.as_deref(), Some("s1"));
-        assert!(msgs[1].content.as_deref().unwrap().contains("summary_result"));
+        assert!(
+            msgs[1]
+                .content
+                .as_deref()
+                .unwrap()
+                .contains("summary_result")
+        );
 
         // Verify summarizer was called with the correct old messages
         let captured = captured.lock().unwrap();

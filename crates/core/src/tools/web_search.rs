@@ -5,7 +5,7 @@
 
 use crate::agent::tool::{Tool, ToolError, ToolSpec};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// A single search result from a web search.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,11 +65,7 @@ impl Default for WebSearchConfig {
 #[async_trait::async_trait]
 pub trait WebSearchProvider: Send + Sync {
     /// Execute a search and return up to `count` results.
-    async fn search(
-        &self,
-        query: &str,
-        count: usize,
-    ) -> Result<Vec<SearchResult>, WebSearchError>;
+    async fn search(&self, query: &str, count: usize) -> Result<Vec<SearchResult>, WebSearchError>;
 }
 
 /// A mock provider that returns predefined results.
@@ -149,27 +145,27 @@ impl Tool for WebSearchTool {
     }
 
     async fn call(&self, args: Value) -> Result<Value, ToolError> {
-        let query = args
-            .get("query")
-            .and_then(Value::as_str)
-            .ok_or_else(|| ToolError::InvalidArgs {
-                tool: "web_search".into(),
-                message: "missing 'query' string".into(),
-            })?;
+        let query =
+            args.get("query")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ToolError::InvalidArgs {
+                    tool: "web_search".into(),
+                    message: "missing 'query' string".into(),
+                })?;
 
         let count = args
             .get("count")
             .and_then(Value::as_u64)
             .map_or(self.config.max_results, |c| c as usize);
 
-        let results = self
-            .provider
-            .search(query, count)
-            .await
-            .map_err(|e| ToolError::Execution {
-                tool: "web_search".into(),
-                message: e.to_string(),
-            })?;
+        let results =
+            self.provider
+                .search(query, count)
+                .await
+                .map_err(|e| ToolError::Execution {
+                    tool: "web_search".into(),
+                    message: e.to_string(),
+                })?;
 
         let items: Vec<Value> = results
             .into_iter()

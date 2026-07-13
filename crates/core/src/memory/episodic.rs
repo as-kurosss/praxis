@@ -193,13 +193,11 @@ impl EpisodicMemory {
     /// Iterate over all entries (oldest first).
     #[must_use]
     pub fn iter(&self) -> impl Iterator<Item = &EpisodicEntry> {
-        self.order
-            .iter()
-            .filter_map(move |id| self.store.get(id))
+        self.order.iter().filter_map(move |id| self.store.get(id))
     }
 
     /// Remove a single entry and its index entries.
-    fn remove_entry(&mut self, turn_id: &str) {
+    pub(crate) fn remove_entry(&mut self, turn_id: &str) {
         if let Some(entry) = self.store.remove(turn_id) {
             for kw in &entry.keywords {
                 if let Some(ids) = self.index.get_mut(kw) {
@@ -296,7 +294,12 @@ impl EpisodicEntry {
 mod tests {
     use super::*;
 
-    fn make_entry(turn_id: &str, input: &str, output: &str, extra_keywords: &[&str]) -> EpisodicEntry {
+    fn make_entry(
+        turn_id: &str,
+        input: &str,
+        output: &str,
+        extra_keywords: &[&str],
+    ) -> EpisodicEntry {
         let mut keywords = EpisodicMemory::extract_keywords(input);
         keywords.extend(EpisodicMemory::extract_keywords(output));
         for kw in extra_keywords {
@@ -329,7 +332,12 @@ mod tests {
     #[test]
     fn test_search_by_keyword() {
         let mut mem = EpisodicMemory::new();
-        mem.record(make_entry("turn_1", "deploy the app", "deployment complete", &[]));
+        mem.record(make_entry(
+            "turn_1",
+            "deploy the app",
+            "deployment complete",
+            &[],
+        ));
         mem.record(make_entry("turn_2", "run tests", "all tests passed", &[]));
 
         let results = mem.search("deploy", 10);

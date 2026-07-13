@@ -39,7 +39,10 @@ pub fn timestamp() -> String {
     let seconds = time_secs % 60;
 
     let (y, m, d) = days_to_date(days);
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m, d, hours, minutes, seconds)
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        y, m, d, hours, minutes, seconds
+    )
 }
 
 fn days_to_date(days: u64) -> (u64, u64, u64) {
@@ -54,7 +57,20 @@ fn days_to_date(days: u64) -> (u64, u64, u64) {
         y += 1;
     }
     let leap = is_leap(y);
-    let months: [i64; 12] = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let months: [i64; 12] = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     let mut m = 1u64;
     for &md in &months {
         if d < md {
