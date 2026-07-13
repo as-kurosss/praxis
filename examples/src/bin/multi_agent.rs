@@ -95,13 +95,9 @@ async fn main() {
 
     // ── 3. Router ────────────────────────────────────────────────
     println!("--- Router ---");
-    let agents = vec![
-        EchoLoop::new("Router-A"),
-        EchoLoop::new("Router-B"),
-    ];
-    let router_fn: Arc<dyn Fn(&String) -> usize + Send + Sync> = Arc::new(|input| {
-        if input.contains("B") { 1 } else { 0 }
-    });
+    let agents = vec![EchoLoop::new("Router-A"), EchoLoop::new("Router-B")];
+    let router_fn: Arc<dyn Fn(&String) -> usize + Send + Sync> =
+        Arc::new(|input| if input.contains("B") { 1 } else { 0 });
     let router = Router::<_, String, u32, String>::new(agents, router_fn);
     let mut state = 0u32;
     let result = router.execute(make_ctx("go to B"), &mut state).await;
@@ -111,10 +107,7 @@ async fn main() {
     // ── 4. Supervisor ────────────────────────────────────────────
     println!("--- Supervisor ---");
     let sup = EchoLoop::new("Supervisor");
-    let workers = vec![
-        EchoLoop::new("Worker-1"),
-        EchoLoop::new("Worker-2"),
-    ];
+    let workers = vec![EchoLoop::new("Worker-1"), EchoLoop::new("Worker-2")];
     let supervisor = Supervisor::<_, String, u32, String>::new(sup, workers);
     let mut state = 0u32;
     let result = supervisor.execute(make_ctx("delegate"), &mut state).await;

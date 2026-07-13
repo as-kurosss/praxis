@@ -1,14 +1,39 @@
-use clap::Parser;
+mod agents;
+mod doctor;
+mod skills;
+
+use clap::{Parser, Subcommand};
 use praxis_core::agent::{Agent, AgentConfig, Tool, ToolCategory, ToolError, ToolSet, ToolSpec};
 use praxis_core::loops::{Context, CycleType, Loop, LoopId, StopCondition};
 use praxis_runtime::OpenAiClient;
 use serde_json::Value;
 use std::time::Duration;
 
+// ── CLI ───────────────────────────────────────────────────────────────────
+
 /// Praxis — Agent Orchestration Framework
 #[derive(Parser)]
 #[command(version, about)]
-struct Args {
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Run an agent with a prompt
+    Run(RunArgs),
+    /// Diagnose the system and optionally fix issues
+    Doctor(doctor::DoctorArgs),
+    /// Manage skills (agent definitions)
+    Skills(skills::SkillsArgs),
+    /// Manage agents
+    Agents(agents::AgentsArgs),
+}
+
+/// Arguments for `praxis run`.
+#[derive(Parser)]
+struct RunArgs {
     /// Prompt to send to the agent
     prompt: String,
 
@@ -130,10 +155,32 @@ fn parse_tool_arg(input: &str) -> Result<ToolSpec, String> {
     })
 }
 
+// ── Entry point ───────────────────────────────────────────────────────────
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = Args::parse();
+    let cli = Cli::parse();
 
+    match cli.command {
+        Command::Run(args) => run_agent(args).await,
+        Command::Doctor(ref args) => {
+            doctor::execute(args).await;
+            Ok(())
+        }
+        Command::Skills(ref args) => {
+            skills::execute(args);
+            Ok(())
+        }
+        Command::Agents(ref args) => {
+            agents::execute(args);
+            Ok(())
+        }
+    }
+}
+
+// ── Agent execution (moved from original main) ───────────────────────────
+
+async fn run_agent(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
     // Resolve API key: arg > env > error
     let api_key = match args.api_key {
         Some(k) => k,

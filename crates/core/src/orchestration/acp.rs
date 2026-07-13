@@ -6,7 +6,7 @@
 //! * An abstract transport trait ([`AcpTransport`])
 //! * [`RemoteAgent`] — a [`Loop`] that communicates via ACP
 
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::marker::PhantomData;
 use std::time::{Duration, SystemTime};
 
@@ -154,10 +154,7 @@ impl InMemoryTransport {
     ///
     /// Returns two transports connected to each other. Messages sent from
     /// `a` are received by `b` and vice versa.
-    pub fn pair(
-        id_a: impl Into<AgentId>,
-        id_b: impl Into<AgentId>,
-    ) -> (Self, Self) {
+    pub fn pair(id_a: impl Into<AgentId>, id_b: impl Into<AgentId>) -> (Self, Self) {
         Self::pair_with_buffer(id_a, id_b, 256)
     }
 
@@ -189,7 +186,11 @@ impl InMemoryTransport {
 #[async_trait::async_trait]
 impl AcpTransport for InMemoryTransport {
     async fn send(&self, msg: AgentMessage<Vec<u8>>) -> Result<AcpStatus, AcpError> {
-        self.tx.send(msg).await.map(|_| AcpStatus::Accepted).map_err(|_| AcpError::ConnectionClosed)
+        self.tx
+            .send(msg)
+            .await
+            .map(|_| AcpStatus::Accepted)
+            .map_err(|_| AcpError::ConnectionClosed)
     }
 
     async fn receive(&self, timeout: Duration) -> Result<Option<AgentMessage<Vec<u8>>>, AcpError> {
@@ -294,20 +295,18 @@ where
             AcpStatus::Accepted => {
                 let timeout = Duration::from_secs(30);
                 match self.transport.receive(timeout).await {
-                    Ok(Some(response)) => {
-                        match serde_json::from_slice(&response.payload) {
-                            Ok(output) => crate::loops::LoopResult::success(
-                                output,
-                                1,
-                                crate::loops::elapsed_ms(&start),
-                            ),
-                            Err(e) => crate::loops::LoopResult::failure(
-                                format!("ACP deserialization error: {e}"),
-                                1,
-                                crate::loops::elapsed_ms(&start),
-                            ),
-                        }
-                    }
+                    Ok(Some(response)) => match serde_json::from_slice(&response.payload) {
+                        Ok(output) => crate::loops::LoopResult::success(
+                            output,
+                            1,
+                            crate::loops::elapsed_ms(&start),
+                        ),
+                        Err(e) => crate::loops::LoopResult::failure(
+                            format!("ACP deserialization error: {e}"),
+                            1,
+                            crate::loops::elapsed_ms(&start),
+                        ),
+                    },
                     Ok(None) => crate::loops::LoopResult::failure(
                         "timeout waiting for ACP response".to_string(),
                         1,
@@ -320,20 +319,16 @@ where
                     ),
                 }
             }
-            AcpStatus::Failed(reason) => {
-                crate::loops::LoopResult::failure(
-                    format!("remote agent failed: {reason}"),
-                    1,
-                    crate::loops::elapsed_ms(&start),
-                )
-            }
-            other => {
-                crate::loops::LoopResult::failure(
-                    format!("unexpected ACP status: {other:?}"),
-                    1,
-                    crate::loops::elapsed_ms(&start),
-                )
-            }
+            AcpStatus::Failed(reason) => crate::loops::LoopResult::failure(
+                format!("remote agent failed: {reason}"),
+                1,
+                crate::loops::elapsed_ms(&start),
+            ),
+            other => crate::loops::LoopResult::failure(
+                format!("unexpected ACP status: {other:?}"),
+                1,
+                crate::loops::elapsed_ms(&start),
+            ),
         }
     }
 }
@@ -353,7 +348,11 @@ mod tests {
         // Spawn a task that receives and responds
         let b_clone = Arc::clone(&transport_b);
         tokio::spawn(async move {
-            let msg = b_clone.receive(Duration::from_secs(5)).await.unwrap().unwrap();
+            let msg = b_clone
+                .receive(Duration::from_secs(5))
+                .await
+                .unwrap()
+                .unwrap();
             let response = format!("echo: {}", String::from_utf8_lossy(&msg.payload));
             let reply = AgentMessage::new(
                 msg.to.clone(),

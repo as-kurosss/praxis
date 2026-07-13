@@ -1355,7 +1355,10 @@ dependencies = [
  "async-trait",
  "clap",
  "praxis-core",
+ "praxis-mcp",
  "praxis-runtime",
+ "reqwest",
+ "serde",
  "serde_json",
  "tokio",
 ]

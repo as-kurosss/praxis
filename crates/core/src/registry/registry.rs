@@ -37,15 +37,12 @@ impl AgentRegistry {
         let path = path.as_ref().to_path_buf();
 
         let file = if path.exists() {
-            let content = std::fs::read_to_string(&path)
-                .map_err(|e| crate::error::Error::Io(e))?;
-            serde_json::from_str(&content)
-                .map_err(|e| crate::error::Error::Json(e))?
+            let content = std::fs::read_to_string(&path).map_err(|e| crate::error::Error::Io(e))?;
+            serde_json::from_str(&content).map_err(|e| crate::error::Error::Json(e))?
         } else {
             // Create parent directories if needed.
             if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| crate::error::Error::Io(e))?;
+                std::fs::create_dir_all(parent).map_err(|e| crate::error::Error::Io(e))?;
             }
             let file = RegistryFile {
                 version: 1,
@@ -53,10 +50,9 @@ impl AgentRegistry {
                 agents: HashMap::new(),
             };
             // Write the empty file.
-            let json = serde_json::to_string_pretty(&file)
-                .map_err(|e| crate::error::Error::Json(e))?;
-            std::fs::write(&path, &json)
-                .map_err(|e| crate::error::Error::Io(e))?;
+            let json =
+                serde_json::to_string_pretty(&file).map_err(|e| crate::error::Error::Json(e))?;
+            std::fs::write(&path, &json).map_err(|e| crate::error::Error::Io(e))?;
             file
         };
 
@@ -69,10 +65,9 @@ impl AgentRegistry {
     /// Persist the current state to disk.
     fn save(&self) -> Result<()> {
         let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let json = serde_json::to_string_pretty(&*guard)
-            .map_err(|e| crate::error::Error::Json(e))?;
-        std::fs::write(&self.path, &json)
-            .map_err(|e| crate::error::Error::Io(e))?;
+        let json =
+            serde_json::to_string_pretty(&*guard).map_err(|e| crate::error::Error::Json(e))?;
+        std::fs::write(&self.path, &json).map_err(|e| crate::error::Error::Io(e))?;
         Ok(())
     }
 
@@ -88,7 +83,12 @@ impl AgentRegistry {
 
     /// Get a provider by ID.
     pub fn get_provider(&self, id: &str) -> Option<ProviderConfig> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).providers.get(id).cloned()
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .providers
+            .get(id)
+            .cloned()
     }
 
     /// Add or update a provider.
@@ -127,7 +127,12 @@ impl AgentRegistry {
 
     /// Get an agent definition by ID.
     pub fn get_agent(&self, id: &str) -> Option<AgentDefinition> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).agents.get(id).cloned()
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .agents
+            .get(id)
+            .cloned()
     }
 
     /// Add or update an agent definition.
