@@ -13,7 +13,7 @@ const PROVIDER_KINDS: { value: ProviderKind; label: string; defaultUrl: string }
   { value: 'anthropic', label: 'Anthropic', defaultUrl: 'https://api.anthropic.com/v1' },
   { value: 'gemini', label: 'Gemini', defaultUrl: 'https://generativelanguage.googleapis.com/v1beta' },
   { value: 'ollama', label: 'Ollama', defaultUrl: 'http://localhost:11434/v1' },
-  { value: 'custom', label: 'Custom API', defaultUrl: '' },
+  { value: 'custom', label: 'Custom (OpenAI-compatible)', defaultUrl: 'https://' },
   { value: 'lm_studio', label: 'LM Studio', defaultUrl: 'http://localhost:1234/v1' },
 ]
 
@@ -22,8 +22,8 @@ const DEFAULT_MODELS: Record<ProviderKind, string> = {
   anthropic: 'claude-3-5-sonnet-20241022',
   gemini: 'gemini-2.0-flash',
   ollama: 'llama3.2',
-  custom: '',
-  lm_studio: 'llama3.2',
+  custom: 'gpt-4o-mini',
+  lm_studio: 'local-model',
 }
 
 export function ProvidersPanel({ providers, onRefresh, addToast }: Props) {
@@ -130,8 +130,8 @@ export function ProvidersPanel({ providers, onRefresh, addToast }: Props) {
             </div>
           </div>
           <div className="form-group">
-<label>API Key {kind === 'ollama' || kind === 'lm_studio' || kind === 'custom' ? <span style={{color:'var(--text2)',fontWeight:400}}>(optional for local)</span> : ''}</label>
-            <input value={apiKey} onChange={e => setApiKey(e.target.value)} type="password" placeholder={kind === 'ollama' || kind === 'lm_studio' || kind === 'custom' ? 'Leave empty for local' : 'sk-...'} />
+            <label>API Key {kind === 'ollama' ? <span style={{color:'var(--text2)',fontWeight:400}}>(optional for local)</span> : ''}</label>
+            <input value={apiKey} onChange={e => setApiKey(e.target.value)} type="password" placeholder={kind === 'ollama' ? 'Leave empty for local' : 'sk-...'} />
           </div>
           <div className="form-group">
             <label>API URL</label>
