@@ -157,8 +157,12 @@ impl AppContainerSandbox {
     }
 
     /// Clean up the AppContainer profile.
+    ///
+    /// Returns the HRESULT from `DeleteAppContainerProfile`.
+    /// Errors are reported via `eprintln!` since the caller (`Drop`)
+    /// cannot propagate them.
     #[cfg(windows)]
-    fn delete_appcontainer_profile(name: &str) {
+    fn delete_appcontainer_profile(name: &str) -> i64 {
         use std::ffi::OsStr;
         use std::os::windows::ffi::OsStrExt;
 
@@ -173,9 +177,13 @@ impl AppContainerSandbox {
             .collect();
 
         // Safety: Calling Windows API with properly null-terminated wide string.
-        unsafe {
-            DeleteAppContainerProfile(name_wide.as_ptr());
+        let hr = unsafe { DeleteAppContainerProfile(name_wide.as_ptr()) };
+        if hr != 0 {
+            eprintln!(
+                "praxis: appcontainer: warning: DeleteAppContainerProfile('{name}') failed with HRESULT: 0x{hr:08x}"
+            );
         }
+        hr
     }
 }
 

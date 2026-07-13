@@ -1,9 +1,14 @@
 import { useState, useEffect, useRef } from 'react'
 import * as api from '../api'
-import type { LogEntry } from '../types'
+interface LogEntry {
+  level: string;
+  message: string;
+  target: string;
+  timestamp: string;
+}
 
 interface Props {
-  addToast: (msg: string, type?: 'error' | 'success') => void
+  addToast: (msg: string, type?: 'error' | 'success' | 'info') => void
 }
 
 export function LogsPanel({ addToast }: Props) {
@@ -15,7 +20,7 @@ export function LogsPanel({ addToast }: Props) {
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const load = async () => {
-    try { setLogs(await api.streamLogs()) }
+    try { setLogs(await api.streamLogs() as LogEntry[]) }
     catch (e: any) { addToast(e.message) }
     finally { setLoading(false) }
   }
@@ -26,7 +31,7 @@ export function LogsPanel({ addToast }: Props) {
   // Poll for new logs every 3 seconds
   useEffect(() => {
     pollingRef.current = setInterval(async () => {
-      try { setLogs(await api.streamLogs()) }
+      try { setLogs(await api.streamLogs() as LogEntry[]) }
       catch { /* silent poll failure */ }
     }, 3000)
     return () => { if (pollingRef.current) clearInterval(pollingRef.current) }

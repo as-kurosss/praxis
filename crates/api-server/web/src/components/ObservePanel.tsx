@@ -1,13 +1,13 @@
 import { useState, useEffect } from 'react'
 import * as api from '../api'
-import type { Trace } from '../types'
+import type { TraceSummary } from '../types'
 
 interface Props {
-  addToast: (msg: string, type?: 'error' | 'success') => void
+  addToast: (msg: string, type?: 'error' | 'success' | 'info') => void
 }
 
 export function ObservePanel({ addToast }: Props) {
-  const [traces, setTraces] = useState<Trace[]>([])
+  const [traces, setTraces] = useState<TraceSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [expandedTrace, setExpandedTrace] = useState<string | null>(null)
 
@@ -20,10 +20,8 @@ export function ObservePanel({ addToast }: Props) {
 
   useEffect(() => { load() }, [])
 
-  const totalTokens = traces.reduce((sum, t) => sum + (t.total_tokens || 0), 0)
-  const avgDuration = traces.length > 0
-    ? Math.round(traces.reduce((sum, t) => sum + (t.total_duration_ms || 0), 0) / traces.length)
-    : 0
+  const totalTokens = traces.reduce((sum, t) => sum + (t.token_count || 0), 0)
+  const avgDuration = 0
 
   if (loading) return <div className="empty-state"><p>Loading traces...</p></div>
 
@@ -51,14 +49,14 @@ export function ObservePanel({ addToast }: Props) {
           <h3 style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Token Usage</h3>
           <div style={{ display: 'flex', gap: 2, height: 40, alignItems: 'flex-end' }}>
             {traces.slice(-20).map((t, i) => {
-              const maxTokens = Math.max(...traces.map(x => x.total_tokens), 1)
-              const height = Math.max((t.total_tokens / maxTokens) * 36, 4)
+              const maxTokens = Math.max(...traces.map(x => x.token_count || 0), 1)
+              const height = Math.max(((t.token_count || 0) / maxTokens) * 36, 4)
               return (
                 <div key={t.id} style={{
                   flex: 1, height, background: 'var(--accent)',
                   borderRadius: '2px 2px 0 0', opacity: 0.6 + (i / traces.length) * 0.4,
                   minWidth: 4, position: 'relative',
-                }} title={`${t.total_tokens} tokens`} />
+                }} title={`${t.token_count} tokens`} />
               )
             })}
           </div>
@@ -80,20 +78,14 @@ export function ObservePanel({ addToast }: Props) {
               <div>
                 <h3>{t.id.slice(0, 12)}...</h3>
                 <p style={{ fontSize: 11 }}>
-                  {t.total_duration_ms}ms · {t.total_tokens} tokens · {t.spans?.length || 0} spans
+                  {t.token_count} tokens · {t.span_count || 0} spans
                 </p>
               </div>
-              <span style={{ color: 'var(--text2)', fontSize: 11 }}>{t.created_at}</span>
+              <span style={{ color: 'var(--text2)', fontSize: 11 }}>{t.start_time}</span>
             </div>
 
-            {expandedTrace === t.id && t.spans && t.spans.length > 0 && (
+            {expandedTrace === t.id && false && (
               <div style={{ marginTop: 8, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
-                {t.spans.map(s => (
-                  <div key={s.id} className="flex-between" style={{ padding: '4px 0', fontSize: 12 }}>
-                    <span>{s.name}</span>
-                    <span style={{ color: 'var(--text2)' }}>{s.duration_ms}ms</span>
-                  </div>
-                ))}
               </div>
             )}
           </div>

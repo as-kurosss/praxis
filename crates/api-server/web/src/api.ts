@@ -1,6 +1,7 @@
 import type {
   ApiResponse, ProviderConfig, AgentDefinition, AgentSummary,
   ChatResponse, SessionSummary, Session, Config, Notification,
+  TraceSummary, TraceDetail, MetricPoint, DashboardStats,
 } from './types';
 
 class ApiError extends Error {
@@ -92,4 +93,66 @@ export async function getConfig(): Promise<Config> {
 
 export async function getNotifications(): Promise<Notification[]> {
   return request('/api/notifications');
+}
+
+// ── Skills ──
+
+export async function listSkills(): Promise<unknown[]> {
+  return request('/api/skills');
+}
+
+// ── Memory ──
+
+export async function searchMemory(q: string): Promise<unknown[]> {
+  return request(`/api/memory/search?q=${encodeURIComponent(q)}`);
+}
+
+// ── Security ──
+
+export async function getSecurityPolicies(): Promise<unknown> {
+  return request('/api/security/policies');
+}
+
+// ── Observe ──
+
+export async function listTraces(): Promise<TraceSummary[]> {
+  return request('/api/observe/traces');
+}
+
+export async function getTraceDetail(id: string): Promise<TraceDetail> {
+  return request(`/api/observe/traces/${id}`);
+}
+
+export async function getTraceSpans(id: string): Promise<unknown[]> {
+  return request(`/api/observe/traces/${id}/spans`);
+}
+
+export async function listMetrics(): Promise<MetricPoint[]> {
+  return request('/api/observe/metrics');
+}
+
+export async function getDashboardStats(): Promise<DashboardStats> {
+  return request('/api/observe/stats');
+}
+
+// ── Logs ──
+
+export async function streamLogs(): Promise<unknown[]> {
+  return request('/api/logs');
+}
+
+// ── Settings ──
+
+export async function getSettings(): Promise<unknown> {
+  return request('/api/settings');
+}
+
+export async function updateSettings(body: unknown): Promise<unknown> {
+  return request('/api/settings', { method: 'PUT', body: JSON.stringify(body) });
+}
+
+// ── Session title ──
+
+export async function updateSessionTitle(id: string, title: string): Promise<Session> {
+  return request(`/api/sessions/${id}/title`, { method: 'PUT', body: JSON.stringify({ title }) });
 }

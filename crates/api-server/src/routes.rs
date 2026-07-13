@@ -258,7 +258,7 @@ async fn run_agent_execution(
     state: &mut Vec<ChatMessage>,
 ) -> praxis_core::loops::LoopResult<String> {
     match provider.kind {
-        ProviderKind::Openai | ProviderKind::Ollama => {
+        ProviderKind::Openai | ProviderKind::Ollama | ProviderKind::Custom | ProviderKind::LmStudio => {
             let agent = Agent::with_tools(openai_client(provider), config, tool_set);
             agent.execute(ctx, state).await
         }
@@ -289,7 +289,7 @@ async fn run_agent_streaming(
     tx: tokio::sync::mpsc::Sender<StreamChunk>,
 ) -> praxis_core::loops::LoopResult<String> {
     match provider.kind {
-        ProviderKind::Openai | ProviderKind::Ollama => {
+        ProviderKind::Openai | ProviderKind::Ollama | ProviderKind::Custom | ProviderKind::LmStudio => {
             let agent = Agent::with_tools(openai_client(provider), config, tool_set);
             agent.execute_stream(ctx, state, tx).await
         }
@@ -415,6 +415,10 @@ async fn create_agent(
         max_tokens: body.max_tokens,
         scroll_strategy: body.scroll_strategy.unwrap_or_default(),
         tools: body.tools.unwrap_or_default(),
+        enabled: true,
+        model_id: None,
+        language: None,
+        auto_continue_retry: 0,
         created_at: now.clone(),
         updated_at: now,
     };
@@ -448,6 +452,10 @@ async fn update_agent(
         max_tokens: body.max_tokens,
         scroll_strategy: body.scroll_strategy.unwrap_or_default(),
         tools: body.tools.unwrap_or_default(),
+        enabled: true,
+        model_id: None,
+        language: None,
+        auto_continue_retry: 0,
         created_at,
         updated_at: now,
     };
@@ -498,6 +506,7 @@ async fn chat_handler(
         temperature: body.temperature.or(def.temperature),
         max_tokens: body.max_tokens.or(def.max_tokens),
         scroll_strategy: scroll_strategy(&def.scroll_strategy),
+        model_id: def.model_id.clone(),
     };
 
     // 5. Get or create session
@@ -571,6 +580,7 @@ async fn chat_stream_handler(
         temperature: params.temperature.or(def.temperature),
         max_tokens: params.max_tokens.or(def.max_tokens),
         scroll_strategy: scroll_strategy(&def.scroll_strategy),
+        model_id: def.model_id.clone(),
     };
 
     let session_id = params

@@ -1,6 +1,6 @@
 // ── Mirror of Rust praxis_core::registry types ──────────────────
 
-export type ProviderKind = 'openai' | 'anthropic' | 'gemini' | 'ollama';
+export type ProviderKind = 'openai' | 'anthropic' | 'gemini' | 'ollama' | 'custom' | 'lm_studio';
 
 export interface ProviderConfig {
   id: string;
@@ -32,6 +32,10 @@ export interface AgentDefinition {
   max_tokens?: number | null;
   scroll_strategy: ScrollConfig;
   tools: ToolBinding[];
+  enabled?: boolean;
+  model_id?: string | null;
+  language?: string | null;
+  auto_continue_retry?: number;
   created_at: string;
   updated_at: string;
 }

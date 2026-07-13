@@ -8,7 +8,7 @@ interface Props {
   messages: ChatMessage[]
   onMessagesChange: (msgs: ChatMessage[]) => void
   onSessionChange: (sessionId: string) => void
-  addToast: (msg: string, type?: 'error' | 'success') => void
+  addToast: (msg: string, type?: 'error' | 'success' | 'info') => void
 }
 
 export function ChatArea({ agentId, sessionId, messages, onMessagesChange, onSessionChange, addToast }: Props) {

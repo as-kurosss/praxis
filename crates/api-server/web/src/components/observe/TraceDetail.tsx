@@ -45,7 +45,7 @@ export function TraceDetail({ trace, onClose }: Props) {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    api.getTraceSpans(trace.id).then(data => {
+    api.getTraceSpans(trace.id).then((data: any) => {
       if (!cancelled) {
         setSpans(data)
         setLoading(false)

@@ -1,6 +1,13 @@
 import { useState, useEffect } from 'react'
 import * as api from '../api'
-import type { SkillDefinition } from '../types'
+interface SkillDefinition {
+  id: string;
+  name: string;
+  enabled: boolean;
+  description: string;
+  version?: string;
+  source_url?: string;
+}
 
 interface Props {
   addToast: (msg: string, type?: 'error' | 'success') => void
@@ -14,7 +21,7 @@ export function SkillsPanel({ addToast }: Props) {
 
   const load = async () => {
     setLoading(true)
-    try { setSkills(await api.listSkills()) }
+    try { setSkills(await api.listSkills() as SkillDefinition[]) }
     catch (e: any) { addToast(e.message) }
     finally { setLoading(false) }
   }
@@ -23,7 +30,7 @@ export function SkillsPanel({ addToast }: Props) {
 
   const toggle = async (id: string, enabled: boolean) => {
     try {
-      await api.toggleSkill(id, enabled)
+      await fetch(`/api/skills/${id}/toggle`, { method: 'POST', body: JSON.stringify({ enabled }) })
       await load()
       addToast('Skill updated', 'success')
     } catch (e: any) { addToast(e.message) }
@@ -32,7 +39,7 @@ export function SkillsPanel({ addToast }: Props) {
   const remove = async (id: string) => {
     if (!confirm('Delete this skill?')) return
     try {
-      await api.deleteSkill(id)
+      await fetch(`/api/skills/${id}`, { method: 'DELETE' })
       await load()
       addToast('Skill deleted', 'success')
     } catch (e: any) { addToast(e.message) }
@@ -41,7 +48,7 @@ export function SkillsPanel({ addToast }: Props) {
   const doImport = async () => {
     if (!importUrl.trim()) return
     try {
-      await api.importSkill(importUrl.trim())
+      await fetch('/api/skills/import', { method: 'POST', body: JSON.stringify({ url: importUrl.trim() }) })
       setImportUrl('')
       setShowImport(false)
       await load()

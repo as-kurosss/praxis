@@ -389,8 +389,6 @@ impl SkillScanner {
                 "Python subprocess execution",
             ),
             (r"os\.popen\(", RiskLevel::High, "Python popen execution"),
-            (r"exec\(", RiskLevel::Critical, "Dynamic code execution"),
-            (r"eval\(", RiskLevel::Critical, "Dynamic code evaluation"),
             (r"unsafe\s*\{", RiskLevel::High, "Rust unsafe block"),
             (r"std::ptr::", RiskLevel::High, "Raw pointer operations"),
             (
@@ -419,6 +417,34 @@ impl SkillScanner {
                     snippet: truncate_snippet(pattern),
                 });
             }
+        }
+
+        // Language-specific patterns — only checked for the matching extension
+        let extension = file.extension().and_then(|e| e.to_str()).unwrap_or("");
+        match extension {
+            "py" => {
+                // Python exec/eval — false positives in Rust comments/strings
+                let py_dynamic: &[(&str, RiskLevel, &str)] = &[
+                    (r"exec\(", RiskLevel::Critical, "Dynamic code execution (Python)"),
+                    (r"eval\(", RiskLevel::Critical, "Dynamic code evaluation (Python)"),
+                ];
+                for (pattern, risk, message) in py_dynamic {
+                    if let Some(line) = find_regex_line(content, pattern) {
+                        if self.is_allowed(pattern) {
+                            continue;
+                        }
+                        findings.push(Finding {
+                            file: file.to_path_buf(),
+                            line,
+                            message: message.to_string(),
+                            risk_level: *risk,
+                            category: FindingCategory::UnsafeSystemCall,
+                            snippet: truncate_snippet(pattern),
+                        });
+                    }
+                }
+            }
+            _ => {}
         }
 
         findings
@@ -665,7 +691,13 @@ pub enum ScanError {
 fn walkdir(dir: &Path, extensions: &[String], max_size: u64) -> Vec<PathBuf> {
     let mut files = Vec::new();
 
-    if let Ok(entries) = std::fs::read_dir(dir) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            eprintln!("praxis: scanner: warning: cannot read directory '{}': {e}", dir.display());
+            return files;
+        }
+    };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -696,7 +728,6 @@ fn walkdir(dir: &Path, extensions: &[String], max_size: u64) -> Vec<PathBuf> {
                 }
             }
         }
-    }
 
     files
 }

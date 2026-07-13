@@ -1,6 +1,12 @@
 import { useState } from 'react'
 import * as api from '../api'
-import type { MemorySearchResult } from '../types'
+interface MemorySearchResult {
+  id: string;
+  content: string;
+  agent_id: string;
+  similarity: number;
+  timestamp: string;
+}
 
 interface Props {
   addToast: (msg: string, type?: 'error' | 'success') => void
@@ -17,7 +23,7 @@ export function MemoryPanel({ addToast }: Props) {
     setSearching(true)
     setSearched(true)
     try {
-      setResults(await api.searchMemory(query.trim()))
+      setResults(await api.searchMemory(query.trim()) as MemorySearchResult[])
     } catch (e: any) { addToast(e.message) }
     finally { setSearching(false) }
   }

@@ -1,6 +1,12 @@
 import { useState, useEffect } from 'react'
 import * as api from '../api'
-import type { SecurityPolicy } from '../types'
+interface SecurityPolicy {
+  id: string;
+  name: string;
+  description: string;
+  action: string;
+  rules: { id: string; name: string; pattern: string }[];
+}
 
 interface Props {
   addToast: (msg: string, type?: 'error' | 'success') => void
@@ -13,7 +19,7 @@ export function SecurityPanel({ addToast }: Props) {
 
   const load = async () => {
     setLoading(true)
-    try { setPolicies(await api.listSecurityPolicies()) }
+    try { setPolicies(await api.getSecurityPolicies() as SecurityPolicy[]) }
     catch (e: any) { addToast(e.message) }
     finally { setLoading(false) }
   }
@@ -58,7 +64,7 @@ export function SecurityPanel({ addToast }: Props) {
             {expanded === p.id && p.rules.length > 0 && (
               <div style={{ marginTop: 8, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
                 <small style={{ color: 'var(--text2)', fontWeight: 600 }}>Rules</small>
-                {p.rules.map(r => (
+                {p.rules.map((r: any) => (
                   <div key={r.id} className="flex-between" style={{ padding: '6px 0', fontSize: 12 }}>
                     <div>
                       <span>{r.name}</span>

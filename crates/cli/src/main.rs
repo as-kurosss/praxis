@@ -216,6 +216,7 @@ async fn run_agent(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
             temperature: None,
             max_tokens: None,
             scroll_strategy: None,
+            model_id: None,
         },
         tool_set,
     );

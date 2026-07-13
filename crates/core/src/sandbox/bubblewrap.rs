@@ -135,9 +135,12 @@ impl BubblewrapSandbox {
     }
 
     /// Check if the bwrap binary is available on the system.
+    ///
+    /// Uses `bwrap --version` directly instead of relying on `which`
+    /// (which is not POSIX-standard and may be absent on minimal images).
     pub fn is_available() -> bool {
-        std::process::Command::new("which")
-            .arg("bwrap")
+        std::process::Command::new("bwrap")
+            .arg("--version")
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)

@@ -196,7 +196,8 @@ impl TaskTracker {
         let mut tasks = self.tasks.lock().await;
         let now = Instant::now();
         tasks.retain(|h| {
-            // Keep if running or completed but younger than max_age
+            // Remove cancelled tasks immediately.
+            // Remove completed/stuck tasks older than max_age.
             if h.is_cancelled() {
                 return false;
             }

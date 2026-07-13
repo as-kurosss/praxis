@@ -49,7 +49,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 use crate::loops::{Context, Loop, LoopResult};
-use crate::memory::episodic::EpisodicMemory;
+use crate::memory::EpisodicMemory;
 
 // ── Constants ───────────────────────────────────────────────────────
 
@@ -155,7 +155,7 @@ where
             };
         }
 
-        let entries: Vec<crate::memory::episodic::EpisodicEntry> = memory.iter().cloned().collect();
+        let entries: Vec<crate::memory::EpisodicEntry> = memory.iter().cloned().collect();
 
         // ── Step 1: Deduplication ──────────────────────────────────
         let mut to_remove: Vec<String> = Vec::new();
@@ -332,7 +332,7 @@ pub fn default_summarizer(pairs: &[(&str, &str)]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::episodic::EpisodicMemory;
+    use crate::memory::EpisodicMemory;
     use std::sync::Arc;
 
     fn make_entry(
@@ -340,7 +340,7 @@ mod tests {
         input: &str,
         output: &str,
         extra_kws: &[&str],
-    ) -> crate::memory::episodic::EpisodicEntry {
+    ) -> crate::memory::EpisodicEntry {
         let mut keywords = EpisodicMemory::extract_keywords(input);
         keywords.extend(EpisodicMemory::extract_keywords(output));
         for kw in extra_kws {
@@ -349,7 +349,7 @@ mod tests {
         keywords.sort();
         keywords.dedup();
 
-        crate::memory::episodic::EpisodicEntry {
+        crate::memory::EpisodicEntry {
             turn_id: turn_id.to_string(),
             timestamp: std::time::SystemTime::now(),
             input: input.to_string(),
