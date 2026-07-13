@@ -1389,12 +1389,14 @@ dependencies = [
  "cron",
  "docx-rs",
  "lopdf",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror",
  "tokio",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -21,6 +21,13 @@ cron = "0.13"
 chrono = "0.4"
 lopdf = { version = "0.34", optional = true }
 docx-rs = { version = "0.4", optional = true }
+regex = "1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_System_Threading",
+    "Win32_Foundation",
+] }
 
 [dev-dependencies]
 tempfile = "3"

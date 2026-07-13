@@ -13,7 +13,7 @@
 
 use crate::agent::tool::{Tool, ToolCategory, ToolError, ToolSpec};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 
 // ── Error type ─────────────────────────────────────────────────────────────
@@ -328,13 +328,13 @@ impl Tool for DocumentReadTool {
     }
 
     async fn call(&self, args: Value) -> Result<Value, ToolError> {
-        let path_str = args
-            .get("path")
-            .and_then(Value::as_str)
-            .ok_or_else(|| ToolError::InvalidArgs {
-                tool: "read_document".into(),
-                message: "missing 'path' string".into(),
-            })?;
+        let path_str =
+            args.get("path")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ToolError::InvalidArgs {
+                    tool: "read_document".into(),
+                    message: "missing 'path' string".into(),
+                })?;
 
         let path = Path::new(path_str);
 
@@ -596,9 +596,7 @@ mod tests {
     #[tokio::test]
     async fn test_call_unsupported_extension() {
         let tool = DocumentReadTool::default();
-        let result = tool
-            .call(json!({ "path": "/tmp/file.unsupported" }))
-            .await;
+        let result = tool.call(json!({ "path": "/tmp/file.unsupported" })).await;
         assert!(matches!(result, Err(ToolError::InvalidArgs { .. })));
     }
 

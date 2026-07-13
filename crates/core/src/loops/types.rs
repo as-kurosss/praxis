@@ -92,7 +92,9 @@ mod opt_duration_millis {
     use std::time::Duration;
 
     pub fn serialize<S>(dur: &Option<Duration>, s: S) -> Result<S::Ok, S::Error>
-    where S: Serializer {
+    where
+        S: Serializer,
+    {
         match dur {
             Some(d) => {
                 let ms = d.as_millis() as u64;
@@ -103,7 +105,9 @@ mod opt_duration_millis {
     }
 
     pub fn deserialize<'de, D>(d: D) -> Result<Option<Duration>, D::Error>
-    where D: Deserializer<'de> {
+    where
+        D: Deserializer<'de>,
+    {
         let ms: Option<u64> = Option::deserialize(d)?;
         Ok(ms.map(Duration::from_millis))
     }

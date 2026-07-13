@@ -1,7 +1,7 @@
 //! **ShellTool** — executes shell commands with built-in safety restrictions.
 
 use crate::agent::tool::{Tool, ToolError, ToolSpec};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::Duration;
 
 /// A tool that executes shell commands.
@@ -52,17 +52,24 @@ impl Tool for ShellTool {
     }
 
     async fn call(&self, args: Value) -> Result<Value, ToolError> {
-        let command = args
-            .get("command")
-            .and_then(Value::as_str)
-            .ok_or_else(|| ToolError::InvalidArgs {
-                tool: "shell".into(),
-                message: "missing 'command' string".into(),
-            })?;
+        let command =
+            args.get("command")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ToolError::InvalidArgs {
+                    tool: "shell".into(),
+                    message: "missing 'command' string".into(),
+                })?;
 
         // Prevent potentially dangerous commands
         let lower = command.to_lowercase();
-        let dangerous = ["rm -rf /", "rm -rf /*", "mkfs", "dd if=", ":(){ :|:& };:", "> /dev/sda"];
+        let dangerous = [
+            "rm -rf /",
+            "rm -rf /*",
+            "mkfs",
+            "dd if=",
+            ":(){ :|:& };:",
+            "> /dev/sda",
+        ];
         if dangerous.iter().any(|d| lower.contains(d)) {
             return Err(ToolError::InvalidArgs {
                 tool: "shell".into(),

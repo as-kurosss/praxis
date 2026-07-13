@@ -34,7 +34,9 @@ impl AppState {
 
         let sessions = SessionStore::open(&data_dir)?;
 
-        let dist_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web").join("dist");
+        let dist_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("web")
+            .join("dist");
 
         Ok(Self {
             registry: Arc::new(registry),
