@@ -2,9 +2,7 @@
 //! MCP server connection: initialize → tool discovery → tool invocation.
 
 use crate::transport::StdioTransport;
-use crate::types::{
-    InitializeResult, McpCallToolResult, McpError, McpToolSpec, ServerInfo,
-};
+use crate::types::{InitializeResult, McpCallToolResult, McpError, McpToolSpec, ServerInfo};
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -40,9 +38,7 @@ impl McpClient {
             }
         });
 
-        let result: Value = transport
-            .request("initialize", Some(init_params))
-            .await?;
+        let result: Value = transport.request("initialize", Some(init_params)).await?;
 
         let init: InitializeResult = serde_json::from_value(result)
             .map_err(|e| McpError::Parse(format!("parse initialize result: {e}")))?;

@@ -49,7 +49,11 @@ impl StdioTransport {
     }
 
     /// Send a JSON-RPC request and await the matching response.
-    pub async fn request(&mut self, method: &str, params: Option<Value>) -> Result<Value, McpError> {
+    pub async fn request(
+        &mut self,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<Value, McpError> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let request = JsonRpcRequest {
             jsonrpc: "2.0".into(),

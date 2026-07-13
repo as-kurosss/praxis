@@ -94,7 +94,25 @@ impl SessionStore {
         std::fs::write(self.session_path(&session.id), &json)
     }
 
-    /// List all sessions (summaries).
+    /// List all sessions across all agents (summaries).
+    pub fn list_all_sessions(&self) -> Vec<SessionSummary> {
+        let cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        let mut summaries: Vec<_> = cache
+            .values()
+            .map(|s| SessionSummary {
+                id: s.id.clone(),
+                agent_id: s.agent_id.clone(),
+                title: s.title.clone(),
+                message_count: s.messages.len(),
+                created_at: s.created_at.clone(),
+                updated_at: s.updated_at.clone(),
+            })
+            .collect();
+        summaries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        summaries
+    }
+
+    /// List all sessions (summaries) for a specific agent.
     pub fn list_sessions(&self, agent_id: &str) -> Vec<SessionSummary> {
         let cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         let mut summaries: Vec<_> = cache
@@ -115,7 +133,11 @@ impl SessionStore {
 
     /// Get a session by ID.
     pub fn get_session(&self, id: &str) -> Option<Session> {
-        self.cache.lock().unwrap_or_else(|e| e.into_inner()).get(id).cloned()
+        self.cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+            .cloned()
     }
 
     /// Add or update a session.

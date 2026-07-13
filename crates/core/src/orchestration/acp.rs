@@ -5,13 +5,14 @@
 //! * A message envelope ([`AgentMessage`]) with routing and TTL
 //! * An abstract transport trait ([`AcpTransport`])
 //! * [`RemoteAgent`] — a [`Loop`] that communicates via ACP
+//! * [`StdioTransport`] — spawns an external process and uses stdio for communication
 
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::marker::PhantomData;
 use std::time::{Duration, SystemTime};
 
 /// ACP-specific errors.
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum AcpError {
     /// The transport connection was closed.
     #[error("ACP connection closed")]
@@ -22,6 +23,15 @@ pub enum AcpError {
     /// A message was received but its TTL has expired.
     #[error("ACP message expired")]
     MessageExpired,
+    /// Failed to spawn the external process.
+    #[error("Failed to spawn external process: {0}")]
+    Spawn(String),
+    /// I/O error during stdio communication.
+    #[error("ACP I/O error: {0}")]
+    Io(String),
+    /// Invalid JSON message received.
+    #[error("Invalid ACP message: {0}")]
+    InvalidMessage(String),
 }
 
 /// Unique identifier for an agent in the ACP network.
@@ -154,10 +164,7 @@ impl InMemoryTransport {
     ///
     /// Returns two transports connected to each other. Messages sent from
     /// `a` are received by `b` and vice versa.
-    pub fn pair(
-        id_a: impl Into<AgentId>,
-        id_b: impl Into<AgentId>,
-    ) -> (Self, Self) {
+    pub fn pair(id_a: impl Into<AgentId>, id_b: impl Into<AgentId>) -> (Self, Self) {
         Self::pair_with_buffer(id_a, id_b, 256)
     }
 
@@ -189,7 +196,11 @@ impl InMemoryTransport {
 #[async_trait::async_trait]
 impl AcpTransport for InMemoryTransport {
     async fn send(&self, msg: AgentMessage<Vec<u8>>) -> Result<AcpStatus, AcpError> {
-        self.tx.send(msg).await.map(|_| AcpStatus::Accepted).map_err(|_| AcpError::ConnectionClosed)
+        self.tx
+            .send(msg)
+            .await
+            .map(|_| AcpStatus::Accepted)
+            .map_err(|_| AcpError::ConnectionClosed)
     }
 
     async fn receive(&self, timeout: Duration) -> Result<Option<AgentMessage<Vec<u8>>>, AcpError> {
@@ -211,6 +222,176 @@ impl AcpTransport for InMemoryTransport {
                 Ok(None) => return Err(AcpError::ConnectionClosed),
                 Err(_) => return Ok(None), // timeout
             }
+        }
+    }
+
+    fn local_id(&self) -> AgentId {
+        self.local_id.clone()
+    }
+}
+
+/// Stdio-based transport for ACP messages.
+///
+/// Spawns an external process (e.g. Claude Code, Codex) and communicates
+/// with it over JSON-delimited stdin/stdout messages.
+///
+/// # Supported runners
+/// * `claude` — Claude Code CLI (`claude`)
+/// * `codex` — Codex CLI (`codex`)
+/// * `opencode` — OpenCode CLI (`opencode`)
+/// * `qwen` — Qwen Code CLI (`qwen`)
+pub struct StdioTransport {
+    local_id: AgentId,
+    child: std::sync::Mutex<Option<tokio::process::Child>>,
+    stdin: tokio::sync::Mutex<Option<tokio::process::ChildStdin>>,
+    reader_handle: Option<tokio::task::JoinHandle<()>>,
+    rx: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<Result<AgentMessage<Vec<u8>>, AcpError>>>,
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl std::fmt::Debug for StdioTransport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StdioTransport")
+            .field("local_id", &self.local_id)
+            .finish()
+    }
+}
+
+impl StdioTransport {
+    /// Create a new stdio transport that spawns an external agent process.
+    ///
+    /// `runner` must be one of `"claude"`, `"codex"`, `"opencode"`, `"qwen"`.
+    /// If the runner binary is not on `$PATH`, it may also be an absolute path.
+    pub fn spawn(
+        local_id: impl Into<AgentId>,
+        runner: &str,
+        args: &[&str],
+    ) -> Result<Self, AcpError> {
+        let binary = match runner {
+            "claude" => "claude",
+            "codex" => "codex",
+            "opencode" => "opencode",
+            "qwen" => "qwen",
+            other => other,
+        };
+
+        let mut child = tokio::process::Command::new(binary)
+            .args(args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| AcpError::Spawn(format!("cannot spawn '{binary}': {e}")))?;
+
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| AcpError::Spawn("failed to capture stdin".into()))?;
+        let mut child_stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| AcpError::Spawn("failed to capture stdout".into()))?;
+
+        // Spawn a background task that reads lines from stdout and sends them over a channel
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<AgentMessage<Vec<u8>>, AcpError>>(256);
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+
+        let handle = tokio::spawn(async move {
+            use tokio::io::AsyncBufReadExt;
+            let reader = tokio::io::BufReader::new(&mut child_stdout);
+            let mut lines = reader.lines();
+            loop {
+                tokio::select! {
+                    _ = &mut shutdown_rx => {
+                        break;
+                    }
+                    line = lines.next_line() => {
+                        match line {
+                            Ok(Some(line)) => {
+                                let trimmed = line.trim().to_string();
+                                if trimmed.is_empty() {
+                                    continue;
+                                }
+                                let msg = match serde_json::from_str(&trimmed) {
+                                    Ok(m) => Ok(m),
+                                    Err(e) => Err(AcpError::InvalidMessage(e.to_string())),
+                                };
+                                if tx.send(msg).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Ok(None) => {
+                                let _ = tx.send(Err(AcpError::ConnectionClosed)).await;
+                                break;
+                            }
+                            Err(e) => {
+                                let _ = tx.send(Err(AcpError::Io(e.to_string()))).await;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        Ok(Self {
+            local_id: local_id.into(),
+            child: std::sync::Mutex::new(Some(child)),
+            stdin: tokio::sync::Mutex::new(Some(stdin)),
+            reader_handle: Some(handle),
+            rx: tokio::sync::Mutex::new(rx),
+            shutdown: Some(shutdown_tx),
+        })
+    }
+}
+
+impl Drop for StdioTransport {
+    fn drop(&mut self) {
+        // Send shutdown signal to the reader task
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        // Abort the reader background task
+        if let Some(handle) = self.reader_handle.take() {
+            handle.abort();
+        }
+        // Kill the child process
+        if let Ok(mut child_lock) = self.child.lock() {
+            if let Some(mut child) = child_lock.take() {
+                let _ = child.start_kill();
+            }
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl AcpTransport for StdioTransport {
+    async fn send(&self, msg: AgentMessage<Vec<u8>>) -> Result<AcpStatus, AcpError> {
+        let mut stdin = self.stdin.lock().await;
+        let stdin = stdin.as_mut().ok_or(AcpError::ConnectionClosed)?;
+        use tokio::io::AsyncWriteExt;
+        let json = serde_json::to_vec(&msg).map_err(|e| AcpError::InvalidMessage(e.to_string()))?;
+        let mut payload = json;
+        payload.push(b'\n');
+        stdin
+            .write_all(&payload)
+            .await
+            .map_err(|e| AcpError::Io(e.to_string()))?;
+        stdin
+            .flush()
+            .await
+            .map_err(|e| AcpError::Io(e.to_string()))?;
+        Ok(AcpStatus::Accepted)
+    }
+
+    async fn receive(&self, timeout: Duration) -> Result<Option<AgentMessage<Vec<u8>>>, AcpError> {
+        let mut rx = self.rx.lock().await;
+        match tokio::time::timeout(timeout, rx.recv()).await {
+            Ok(Some(Ok(msg))) => Ok(Some(msg)),
+            Ok(Some(Err(e))) => Err(e),
+            Ok(None) => Err(AcpError::ConnectionClosed),
+            Err(_) => Ok(None), // timeout
         }
     }
 
@@ -294,20 +475,18 @@ where
             AcpStatus::Accepted => {
                 let timeout = Duration::from_secs(30);
                 match self.transport.receive(timeout).await {
-                    Ok(Some(response)) => {
-                        match serde_json::from_slice(&response.payload) {
-                            Ok(output) => crate::loops::LoopResult::success(
-                                output,
-                                1,
-                                crate::loops::elapsed_ms(&start),
-                            ),
-                            Err(e) => crate::loops::LoopResult::failure(
-                                format!("ACP deserialization error: {e}"),
-                                1,
-                                crate::loops::elapsed_ms(&start),
-                            ),
-                        }
-                    }
+                    Ok(Some(response)) => match serde_json::from_slice(&response.payload) {
+                        Ok(output) => crate::loops::LoopResult::success(
+                            output,
+                            1,
+                            crate::loops::elapsed_ms(&start),
+                        ),
+                        Err(e) => crate::loops::LoopResult::failure(
+                            format!("ACP deserialization error: {e}"),
+                            1,
+                            crate::loops::elapsed_ms(&start),
+                        ),
+                    },
                     Ok(None) => crate::loops::LoopResult::failure(
                         "timeout waiting for ACP response".to_string(),
                         1,
@@ -320,20 +499,16 @@ where
                     ),
                 }
             }
-            AcpStatus::Failed(reason) => {
-                crate::loops::LoopResult::failure(
-                    format!("remote agent failed: {reason}"),
-                    1,
-                    crate::loops::elapsed_ms(&start),
-                )
-            }
-            other => {
-                crate::loops::LoopResult::failure(
-                    format!("unexpected ACP status: {other:?}"),
-                    1,
-                    crate::loops::elapsed_ms(&start),
-                )
-            }
+            AcpStatus::Failed(reason) => crate::loops::LoopResult::failure(
+                format!("remote agent failed: {reason}"),
+                1,
+                crate::loops::elapsed_ms(&start),
+            ),
+            other => crate::loops::LoopResult::failure(
+                format!("unexpected ACP status: {other:?}"),
+                1,
+                crate::loops::elapsed_ms(&start),
+            ),
         }
     }
 }
@@ -353,7 +528,11 @@ mod tests {
         // Spawn a task that receives and responds
         let b_clone = Arc::clone(&transport_b);
         tokio::spawn(async move {
-            let msg = b_clone.receive(Duration::from_secs(5)).await.unwrap().unwrap();
+            let msg = b_clone
+                .receive(Duration::from_secs(5))
+                .await
+                .unwrap()
+                .unwrap();
             let response = format!("echo: {}", String::from_utf8_lossy(&msg.payload));
             let reply = AgentMessage::new(
                 msg.to.clone(),

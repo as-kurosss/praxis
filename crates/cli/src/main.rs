@@ -1,5 +1,7 @@
 use clap::Parser;
-use praxis_core::agent::{Agent, AgentConfig, Tool, ToolCategory, ToolError, ToolSet, ToolSpec};
+use praxis_core::agent::{
+    Agent, AgentConfig, TaskId, TaskTracker, Tool, ToolCategory, ToolError, ToolSet, ToolSpec,
+};
 use praxis_core::loops::{Context, CycleType, Loop, LoopId, StopCondition};
 use praxis_runtime::OpenAiClient;
 use serde_json::Value;
@@ -39,6 +41,10 @@ struct Args {
     /// Tool specification(s) in `name=description:json_schema` format
     #[arg(long = "tool", value_name = "NAME=DESC:JSON_SCHEMA")]
     tools: Vec<String>,
+
+    /// Run the agent in background mode (returns immediately with task ID)
+    #[arg(long, default_value_t = false)]
+    background: bool,
 }
 
 // ── Built-in tools ────────────────────────────────────────────────────────
@@ -165,6 +171,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         client,
         AgentConfig {
             model: args.model.clone(),
+            model_id: None,
             system_prompt: "You are a helpful assistant.".into(),
             temperature: None,
             max_tokens: None,
@@ -184,20 +191,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.prompt,
     );
 
-    let mut state = Vec::new();
-    let result = agent.execute(ctx, &mut state).await;
+    if args.background {
+        // Background mode: spawn via TaskTracker
+        let tracker = TaskTracker::new();
+        let task_id = TaskId::new();
+        let handle = tracker
+            .spawn_background(task_id.clone(), agent, ctx, Vec::new())
+            .await;
 
-    if result.is_success() {
-        if let Some(output) = &result.output {
-            println!("{output}");
-        }
+        println!("Task {} started in background", task_id);
+        println!("Use the API to poll status at GET /api/tasks/{}", task_id.0);
+
+        // Wait a bit and show initial status
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let summary = handle.summary().await;
+        println!("Status: {:?}", summary.status);
+        println!("Elapsed: {}ms", summary.elapsed_ms);
     } else {
-        eprintln!(
-            "Agent failed after {} iterations ({duration_ms}ms): {status:?}",
-            result.iterations,
-            duration_ms = result.duration_ms,
-            status = result.status,
-        );
+        let mut state = Vec::new();
+        let result = agent.execute(ctx, &mut state).await;
+
+        if result.is_success() {
+            if let Some(output) = &result.output {
+                println!("{output}");
+            }
+        } else {
+            eprintln!(
+                "Agent failed after {} iterations ({duration_ms}ms): {status:?}",
+                result.iterations,
+                duration_ms = result.duration_ms,
+                status = result.status,
+            );
+        }
     }
 
     Ok(())

@@ -18,23 +18,21 @@
 //! | `GET` | `/api/agents/{id}/chat/stream` | SSE stream chat |
 //! | `GET` | `/api/agents/{id}/sessions` | List sessions for an agent |
 //! | `DELETE` | `/api/sessions/{id}` | Delete a session |
+//! | `GET` | `/api/stats` | Get agent system statistics |
 
 use crate::state::AppState;
 use axum::{
+    Router,
     extract::{Path, State},
     http::StatusCode,
-    response::{sse::Event, Json, Sse},
+    response::{Json, Sse, sse::Event},
     routing::{get, post, put},
-    Router,
 };
-use tower_http::services::{ServeDir, ServeFile};
-use praxis_core::agent::{
-    Agent, AgentConfig, ChatMessage, StreamChunk, ToolSet,
-};
+use futures::stream::{self, StreamExt};
+use praxis_core::agent::{Agent, AgentConfig, ChatMessage, StreamChunk, ToolSet};
 use praxis_core::loops::{Context, CycleType, Loop, LoopId, StopCondition};
 use praxis_core::registry::{
-    AgentDefinition, ProviderConfig, ProviderKind, ScrollConfig, Session,
-    ToolBinding,
+    AgentDefinition, ProviderConfig, ProviderKind, ScrollConfig, Session, ToolBinding,
 };
 use praxis_core::tools::{CalculatorTool, CustomTool, TimeTool};
 use praxis_runtime::{AnthropicClient, GeminiClient, OpenAiClient};
@@ -42,7 +40,7 @@ use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::time::Duration;
 use tokio_stream::wrappers::ReceiverStream;
-use futures::stream::{self, StreamExt};
+use tower_http::services::{ServeDir, ServeFile};
 
 // ── Response wrapper ──────────────────────────────────────────────────
 
@@ -55,12 +53,20 @@ struct ApiResponse<T: Serialize> {
 
 impl<T: Serialize> ApiResponse<T> {
     fn ok(data: T) -> Json<Self> {
-        Json(Self { success: true, data: Some(data), error: None })
+        Json(Self {
+            success: true,
+            data: Some(data),
+            error: None,
+        })
     }
     fn err(msg: impl Into<String>) -> (StatusCode, Json<Self>) {
         (
             StatusCode::BAD_REQUEST,
-            Json(Self { success: false, data: None, error: Some(msg.into()) }),
+            Json(Self {
+                success: false,
+                data: None,
+                error: Some(msg.into()),
+            }),
         )
     }
 }
@@ -84,10 +90,20 @@ struct CreateAgentRequest {
     description: Option<String>,
     provider_id: String,
     system_prompt: String,
+    model_id: Option<String>,
+    #[serde(default = "default_enabled")]
+    enabled: bool,
+    language: Option<String>,
+    #[serde(default)]
+    auto_continue_retry: u32,
     temperature: Option<f32>,
     max_tokens: Option<u32>,
     scroll_strategy: Option<ScrollConfig>,
     tools: Option<Vec<ToolBinding>>,
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 #[derive(Deserialize)]
@@ -135,27 +151,46 @@ struct SessionSummaryResponse {
     preview: Vec<String>,
 }
 
+#[derive(Serialize)]
+struct StatsResponse {
+    total_agents: usize,
+    enabled_agents: usize,
+    total_providers: usize,
+    total_sessions: usize,
+    total_messages: usize,
+}
+
 // ── Build the router ──────────────────────────────────────────────────
 
 pub fn router(state: AppState) -> Router {
     let dist_dir = state.dist_dir.clone();
 
-    let serve_dir = ServeDir::new(&dist_dir)
-        .fallback(ServeFile::new(dist_dir.join("index.html")));
+    let serve_dir = ServeDir::new(&dist_dir).fallback(ServeFile::new(dist_dir.join("index.html")));
 
     Router::new()
         // Provider CRUD
         .route("/api/providers", get(list_providers).post(create_provider))
-        .route("/api/providers/{id}", put(update_provider).delete(delete_provider))
+        .route(
+            "/api/providers/{id}",
+            put(update_provider).delete(delete_provider),
+        )
         // Agent CRUD
         .route("/api/agents", get(list_agents).post(create_agent))
-        .route("/api/agents/{id}", get(get_agent).put(update_agent).delete(delete_agent))
+        .route(
+            "/api/agents/{id}",
+            get(get_agent).put(update_agent).delete(delete_agent),
+        )
         // Chat
         .route("/api/agents/{id}/chat", post(chat_handler))
         .route("/api/agents/{id}/chat/stream", get(chat_stream_handler))
         // Sessions
         .route("/api/agents/{id}/sessions", get(list_sessions))
-        .route("/api/sessions/{id}", get(get_session_detail).delete(delete_session))
+        .route(
+            "/api/sessions/{id}",
+            get(get_session_detail).delete(delete_session),
+        )
+        // Stats
+        .route("/api/stats", get(stats_handler))
         .with_state(state)
         // Static files (SPA)
         .fallback_service(serve_dir)
@@ -167,14 +202,22 @@ fn build_tool_set(tools: &[ToolBinding]) -> ToolSet {
     let mut ts = ToolSet::new();
     for binding in tools {
         match binding {
-            ToolBinding::Builtin { name, enabled: true } => {
+            ToolBinding::Builtin {
+                name,
+                enabled: true,
+            } => {
                 match name.as_str() {
                     "calculator" => ts.add(CalculatorTool),
                     "time" | "current_time" => ts.add(TimeTool),
                     _ => { /* unknown builtin — skip */ }
                 }
             }
-            ToolBinding::Custom { name, description, schema, enabled: true } => {
+            ToolBinding::Custom {
+                name,
+                description,
+                schema,
+                enabled: true,
+            } => {
                 ts.add(CustomTool::new(name, description, schema.clone()));
             }
             _ => {}
@@ -186,10 +229,14 @@ fn build_tool_set(tools: &[ToolBinding]) -> ToolSet {
 fn scroll_strategy(config: &ScrollConfig) -> Option<praxis_core::memory::ScrollStrategy> {
     match config {
         ScrollConfig::Truncate { max_messages } => {
-            Some(praxis_core::memory::ScrollStrategy::Truncate { max_messages: *max_messages })
+            Some(praxis_core::memory::ScrollStrategy::Truncate {
+                max_messages: *max_messages,
+            })
         }
         ScrollConfig::SlidingWindow { window_size } => {
-            Some(praxis_core::memory::ScrollStrategy::SlidingWindow { window_size: *window_size })
+            Some(praxis_core::memory::ScrollStrategy::SlidingWindow {
+                window_size: *window_size,
+            })
         }
         ScrollConfig::NoOp => None,
     }
@@ -228,7 +275,10 @@ async fn run_agent_execution(
             agent.execute(ctx, state).await
         }
         ProviderKind::Anthropic => {
-            let url = provider.api_url.as_deref().unwrap_or("https://api.anthropic.com/v1");
+            let url = provider
+                .api_url
+                .as_deref()
+                .unwrap_or("https://api.anthropic.com/v1");
             let client = AnthropicClient::new(url, &provider.api_key, &provider.model);
             let agent = Agent::with_tools(client, config, tool_set);
             agent.execute(ctx, state).await
@@ -256,7 +306,10 @@ async fn run_agent_streaming(
             agent.execute_stream(ctx, state, tx).await
         }
         ProviderKind::Anthropic => {
-            let url = provider.api_url.as_deref().unwrap_or("https://api.anthropic.com/v1");
+            let url = provider
+                .api_url
+                .as_deref()
+                .unwrap_or("https://api.anthropic.com/v1");
             let client = AnthropicClient::new(url, &provider.api_key, &provider.model);
             let agent = Agent::with_tools(client, config, tool_set);
             agent.execute_stream(ctx, state, tx).await
@@ -271,9 +324,7 @@ async fn run_agent_streaming(
 
 // ── Provider CRUD ────────────────────────────────────────────────────
 
-async fn list_providers(
-    State(state): State<AppState>,
-) -> Json<ApiResponse<Vec<ProviderConfig>>> {
+async fn list_providers(State(state): State<AppState>) -> Json<ApiResponse<Vec<ProviderConfig>>> {
     ApiResponse::ok(state.registry.list_providers())
 }
 
@@ -291,9 +342,10 @@ async fn create_provider(
         model: body.model,
         notes: None,
     };
-    state.registry.upsert_provider(config.clone()).map_err(|e| {
-        ApiResponse::err(format!("Failed to save provider: {e}"))
-    })?;
+    state
+        .registry
+        .upsert_provider(config.clone())
+        .map_err(|e| ApiResponse::err(format!("Failed to save provider: {e}")))?;
     Ok(ApiResponse::ok(config))
 }
 
@@ -311,9 +363,10 @@ async fn update_provider(
         model: body.model,
         notes: None,
     };
-    state.registry.upsert_provider(config.clone()).map_err(|e| {
-        ApiResponse::err(format!("Failed to save provider: {e}"))
-    })?;
+    state
+        .registry
+        .upsert_provider(config.clone())
+        .map_err(|e| ApiResponse::err(format!("Failed to save provider: {e}")))?;
     Ok(ApiResponse::ok(config))
 }
 
@@ -321,17 +374,16 @@ async fn delete_provider(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<bool>>, (StatusCode, Json<ApiResponse<bool>>)> {
-    state.registry.delete_provider(&id).map_err(|e| {
-        ApiResponse::err(format!("Failed to delete provider: {e}"))
-    })?;
+    state
+        .registry
+        .delete_provider(&id)
+        .map_err(|e| ApiResponse::err(format!("Failed to delete provider: {e}")))?;
     Ok(ApiResponse::ok(true))
 }
 
 // ── Agent CRUD ───────────────────────────────────────────────────────
 
-async fn list_agents(
-    State(state): State<AppState>,
-) -> Json<ApiResponse<Vec<AgentSummary>>> {
+async fn list_agents(State(state): State<AppState>) -> Json<ApiResponse<Vec<AgentSummary>>> {
     let agents = state.registry.list_agents();
     let summaries: Vec<AgentSummary> = agents
         .into_iter()
@@ -371,6 +423,10 @@ async fn create_agent(
         description: body.description,
         provider_id: body.provider_id,
         system_prompt: body.system_prompt,
+        model_id: body.model_id,
+        enabled: body.enabled,
+        language: body.language,
+        auto_continue_retry: body.auto_continue_retry,
         temperature: body.temperature,
         max_tokens: body.max_tokens,
         scroll_strategy: body.scroll_strategy.unwrap_or_default(),
@@ -378,9 +434,10 @@ async fn create_agent(
         created_at: now.clone(),
         updated_at: now,
     };
-    state.registry.upsert_agent(def.clone()).map_err(|e| {
-        ApiResponse::err(format!("Failed to save agent: {e}"))
-    })?;
+    state
+        .registry
+        .upsert_agent(def.clone())
+        .map_err(|e| ApiResponse::err(format!("Failed to save agent: {e}")))?;
     Ok(ApiResponse::ok(def))
 }
 
@@ -403,6 +460,10 @@ async fn update_agent(
         description: body.description,
         provider_id: body.provider_id,
         system_prompt: body.system_prompt,
+        model_id: body.model_id,
+        enabled: body.enabled,
+        language: body.language,
+        auto_continue_retry: body.auto_continue_retry,
         temperature: body.temperature,
         max_tokens: body.max_tokens,
         scroll_strategy: body.scroll_strategy.unwrap_or_default(),
@@ -410,9 +471,10 @@ async fn update_agent(
         created_at,
         updated_at: now,
     };
-    state.registry.upsert_agent(def.clone()).map_err(|e| {
-        ApiResponse::err(format!("Failed to save agent: {e}"))
-    })?;
+    state
+        .registry
+        .upsert_agent(def.clone())
+        .map_err(|e| ApiResponse::err(format!("Failed to save agent: {e}")))?;
     Ok(ApiResponse::ok(def))
 }
 
@@ -420,9 +482,10 @@ async fn delete_agent(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<bool>>, (StatusCode, Json<ApiResponse<bool>>)> {
-    state.registry.delete_agent(&id).map_err(|e| {
-        ApiResponse::err(format!("Failed to delete agent: {e}"))
-    })?;
+    state
+        .registry
+        .delete_agent(&id)
+        .map_err(|e| ApiResponse::err(format!("Failed to delete agent: {e}")))?;
     Ok(ApiResponse::ok(true))
 }
 
@@ -450,7 +513,11 @@ async fn chat_handler(
 
     // 4. Build agent config
     let config = AgentConfig {
-        model: provider.model.clone(),
+        model: def
+            .model_id
+            .clone()
+            .unwrap_or_else(|| provider.model.clone()),
+        model_id: def.model_id.clone(),
         system_prompt: def.system_prompt.clone(),
         temperature: body.temperature.or(def.temperature),
         max_tokens: body.max_tokens.or(def.max_tokens),
@@ -458,9 +525,9 @@ async fn chat_handler(
     };
 
     // 5. Get or create session
-    let session_id = body.session_id.unwrap_or_else(|| {
-        format!("sess_{}", uuid::Uuid::new_v4())
-    });
+    let session_id = body
+        .session_id
+        .unwrap_or_else(|| format!("sess_{}", uuid::Uuid::new_v4()));
 
     // 6. Build context
     let ctx = Context::new(
@@ -495,7 +562,10 @@ async fn chat_handler(
             session_id,
             message: output,
         })),
-        None => Err(ApiResponse::err(format!("Agent failed: {:?}", result.status))),
+        None => Err(ApiResponse::err(format!(
+            "Agent failed: {:?}",
+            result.status
+        ))),
     }
 }
 
@@ -520,16 +590,20 @@ async fn chat_stream_handler(
     let tool_set = build_tool_set(&def.tools);
 
     let config = AgentConfig {
-        model: provider.model.clone(),
+        model: def
+            .model_id
+            .clone()
+            .unwrap_or_else(|| provider.model.clone()),
+        model_id: def.model_id.clone(),
         system_prompt: def.system_prompt.clone(),
         temperature: params.temperature.or(def.temperature),
         max_tokens: params.max_tokens.or(def.max_tokens),
         scroll_strategy: scroll_strategy(&def.scroll_strategy),
     };
 
-    let session_id = params.session_id.unwrap_or_else(|| {
-        format!("sess_{}", uuid::Uuid::new_v4())
-    });
+    let session_id = params
+        .session_id
+        .unwrap_or_else(|| format!("sess_{}", uuid::Uuid::new_v4()));
 
     let ctx = Context::new(
         LoopId::new(),
@@ -552,8 +626,14 @@ async fn chat_stream_handler(
 
     tokio::spawn(async move {
         let _result = run_agent_streaming(
-            &provider, config, tool_set, ctx, &mut state_messages, tx.clone(),
-        ).await;
+            &provider,
+            config,
+            tool_set,
+            ctx,
+            &mut state_messages,
+            tx.clone(),
+        )
+        .await;
 
         // IMPORTANT: Drop the original tx sender IMMEDIATELY after streaming
         // completes, BEFORE saving the session.  The Sse stream wraps rx
@@ -577,38 +657,26 @@ async fn chat_stream_handler(
 
     // Prepend a session_id event so the frontend knows the session
     let session_event = stream::once(async move {
-        Ok(Event::default().data(session_id_for_event).event("session_id"))
+        Ok(Event::default()
+            .data(session_id_for_event)
+            .event("session_id"))
     });
 
     let stream = session_event.chain(ReceiverStream::new(rx).map(|chunk| {
         match chunk {
-            StreamChunk::Token(text) => {
-                Ok(Event::default().data(text).event("token"))
-            }
-            StreamChunk::Reasoning(text) => {
-                Ok(Event::default().data(text).event("reasoning"))
-            }
-            StreamChunk::ToolCallStart { id, name } => {
-                Ok(Event::default()
-                    .data(serde_json::json!({"id": id, "name": name}).to_string())
-                    .event("tool_call_start"))
-            }
-            StreamChunk::ToolCallEnd { id } => {
-                Ok(Event::default()
-                    .data(serde_json::json!({"id": id}).to_string())
-                    .event("tool_call_end"))
-            }
-            StreamChunk::ToolCallArguments { id, arguments } => {
-                Ok(Event::default()
-                    .data(serde_json::json!({"id": id, "arguments": arguments}).to_string())
-                    .event("tool_call_arguments"))
-            }
-            StreamChunk::Done => {
-                Ok(Event::default().data("").event("done"))
-            }
-            StreamChunk::Error(msg) => {
-                Ok(Event::default().data(msg).event("error"))
-            }
+            StreamChunk::Token(text) => Ok(Event::default().data(text).event("token")),
+            StreamChunk::Reasoning(text) => Ok(Event::default().data(text).event("reasoning")),
+            StreamChunk::ToolCallStart { id, name } => Ok(Event::default()
+                .data(serde_json::json!({"id": id, "name": name}).to_string())
+                .event("tool_call_start")),
+            StreamChunk::ToolCallEnd { id } => Ok(Event::default()
+                .data(serde_json::json!({"id": id}).to_string())
+                .event("tool_call_end")),
+            StreamChunk::ToolCallArguments { id, arguments } => Ok(Event::default()
+                .data(serde_json::json!({"id": id, "arguments": arguments}).to_string())
+                .event("tool_call_arguments")),
+            StreamChunk::Done => Ok(Event::default().data("").event("done")),
+            StreamChunk::Error(msg) => Ok(Event::default().data(msg).event("error")),
         }
     }));
 
@@ -685,9 +753,30 @@ async fn delete_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<bool>>, (StatusCode, Json<ApiResponse<bool>>)> {
-    state.sessions.delete_session(&id).map_err(|e| {
-        ApiResponse::err(format!("Failed to delete session: {e}"))
-    })?;
+    state
+        .sessions
+        .delete_session(&id)
+        .map_err(|e| ApiResponse::err(format!("Failed to delete session: {e}")))?;
     Ok(ApiResponse::ok(true))
 }
 
+/// GET /api/stats — return system-wide agent statistics.
+async fn stats_handler(State(state): State<AppState>) -> Json<ApiResponse<StatsResponse>> {
+    let agents = state.registry.list_agents();
+    let providers = state.registry.list_providers();
+    let all_sessions = state.sessions.list_all_sessions();
+
+    let total_agents = agents.len();
+    let enabled_agents = agents.iter().filter(|a| a.enabled).count();
+    let total_providers = providers.len();
+    let total_sessions = all_sessions.len();
+    let total_messages: usize = all_sessions.iter().map(|s| s.message_count).sum();
+
+    ApiResponse::ok(StatsResponse {
+        total_agents,
+        enabled_agents,
+        total_providers,
+        total_sessions,
+        total_messages,
+    })
+}

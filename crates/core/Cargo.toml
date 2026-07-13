@@ -14,7 +14,7 @@ all-docs = ["pdf", "docx"]
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["process", "io-util"] }
 uuid.workspace = true
 async-trait.workspace = true
 cron = "0.13"

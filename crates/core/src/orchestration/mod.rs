@@ -9,7 +9,7 @@
 //! * [`Supervisor`] — a leader agent delegates to worker agents
 //! * [`Router`] — route input to an agent based on a routing function
 
-mod acp;
+pub mod acp;
 mod broadcast;
 mod round_robin;
 mod router;
