@@ -1,0 +1,17 @@
+{
+  "id": "sess_6aa1f284-0efe-4d97-8cbe-a60fb499d02f",
+  "agent_id": "052b3ab7-504a-4062-a389-4b744530f45e",
+  "title": null,
+  "messages": [
+    {
+      "role": "User",
+      "content": "Кто победил по итогу, заяц или волк?"
+    },
+    {
+      "role": "User",
+      "content": "Кто победил по итогу, заяц или волк?"
+    }
+  ],
+  "created_at": "2026-07-13T08:33:06Z",
+  "updated_at": "2026-07-13T08:33:06Z"
+}

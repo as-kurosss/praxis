@@ -10,6 +10,7 @@ pub mod loops;
 pub mod memory;
 pub mod orchestration;
 pub mod persistence;
+pub mod registry;
 pub mod sandbox;
 pub mod scheduler;
 pub mod tools;

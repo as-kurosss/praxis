@@ -36,11 +36,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(chunk) = rx.recv().await {
         match chunk {
             StreamChunk::Token(text) => print!("{text}"),
+            StreamChunk::Reasoning(reasoning) => {
+                println!("\n[Reasoning] {reasoning}")
+            }
             StreamChunk::ToolCallStart { id, name } => {
                 println!("\n[Tool Call] {name} ({id})")
             }
             StreamChunk::ToolCallEnd { id } => {
                 println!("[Tool End] {id}")
+            }
+            StreamChunk::ToolCallArguments { id, .. } => {
+                println!("[Tool Args] {id}")
             }
             StreamChunk::Done => {
                 println!("\n[Done]");

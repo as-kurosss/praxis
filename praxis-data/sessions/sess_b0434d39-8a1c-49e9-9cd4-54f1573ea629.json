@@ -1,0 +1,25 @@
+{
+  "id": "sess_b0434d39-8a1c-49e9-9cd4-54f1573ea629",
+  "agent_id": "052b3ab7-504a-4062-a389-4b744530f45e",
+  "title": null,
+  "messages": [
+    {
+      "role": "User",
+      "content": "Что такое солнце?"
+    },
+    {
+      "role": "Assistant",
+      "content": null
+    },
+    {
+      "role": "User",
+      "content": "Что такое солнце?"
+    },
+    {
+      "role": "User",
+      "content": "Что такое солнце?"
+    }
+  ],
+  "created_at": "2026-07-13T08:06:57Z",
+  "updated_at": "2026-07-13T08:06:57Z"
+}

@@ -371,6 +371,7 @@ fn from_anthropic_response(resp: AnthropicResponse) -> ChatResponse {
     let chat_msg = ChatMessage {
         role: Role::Assistant,
         content,
+        reasoning_content: None,
         tool_calls,
         tool_call_id: None,
     };

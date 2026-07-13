@@ -10,8 +10,11 @@
 //! let client = OpenAiClient::new("http://localhost:11434/v1", "ollama", "llama3");
 //! ```
 
+use std::collections::HashMap;
+use futures::StreamExt;
 use praxis_core::agent::{
-    ChatMessage, ChatRequest, ChatResponse, LlmClient, LlmError, Role, ToolCall, ToolSpec, Usage,
+    ChatMessage, ChatRequest, ChatResponse, LlmClient, LlmError, Role, StreamChunk, ToolCall,
+    ToolSpec, Usage,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -28,6 +31,8 @@ struct OpenAiRequest {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    stream: bool,
 }
 
 #[derive(Serialize)]
@@ -63,7 +68,7 @@ struct OpenAiTool {
     function: ToolSpec,
 }
 
-/// Response body from `OpenAI` chat completions API.
+/// Response body from `OpenAI` chat completions API (non-streaming).
 #[derive(Deserialize)]
 struct OpenAiResponse {
     #[allow(dead_code)]
@@ -84,6 +89,8 @@ struct OpenAiResponseMessage {
     #[allow(dead_code)]
     role: Option<String>,
     content: Option<String>,
+    #[serde(default)]
+    reasoning_content: Option<String>,
     tool_calls: Option<Vec<OpenAiResponseToolCall>>,
 }
 
@@ -107,6 +114,52 @@ struct OpenAiResponseFunction {
 struct OpenAiUsage {
     prompt_tokens: Option<u32>,
     completion_tokens: Option<u32>,
+}
+
+// ── SSE streaming types ────────────────────────────────────────────────
+
+/// A single delta chunk from an OpenAI streaming response.
+#[derive(Deserialize)]
+struct OpenAiStreamChunk {
+    #[allow(dead_code)]
+    id: Option<String>,
+    choices: Vec<OpenAiStreamChoice>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiStreamChoice {
+    delta: OpenAiStreamDelta,
+    #[allow(dead_code)]
+    finish_reason: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct OpenAiStreamDelta {
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<OpenAiStreamToolCallDelta>>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiStreamToolCallDelta {
+    #[serde(default)]
+    #[allow(dead_code)]
+    index: u32,
+    id: Option<String>,
+    #[serde(rename = "type")]
+    #[allow(dead_code)]
+    type_: Option<String>,
+    function: Option<OpenAiStreamFunctionDelta>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiStreamFunctionDelta {
+    name: Option<String>,
+    #[serde(default)]
+    arguments: Option<String>,
 }
 
 /// Error type for the `OpenAI` client.
@@ -198,9 +251,18 @@ impl OpenAiClient {
 #[async_trait::async_trait]
 impl LlmClient for OpenAiClient {
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, LlmError> {
-        let openai_req = self.build_request(&request);
+        let openai_req = self.build_request(&request, false);
         let response = self.send_request(&openai_req).await?;
         Ok(response)
+    }
+
+    async fn chat_stream(
+        &self,
+        request: ChatRequest,
+    ) -> Result<tokio::sync::mpsc::Receiver<StreamChunk>, LlmError> {
+        let openai_req = self.build_request(&request, true);
+        let rx = self.send_stream_request(&openai_req).await?;
+        Ok(rx)
     }
 }
 
@@ -208,7 +270,7 @@ impl LlmClient for OpenAiClient {
 
 impl OpenAiClient {
     /// Build the `OpenAI` request body from a `ChatRequest`.
-    fn build_request(&self, request: &ChatRequest) -> OpenAiRequest {
+    fn build_request(&self, request: &ChatRequest, stream: bool) -> OpenAiRequest {
         OpenAiRequest {
             model: self.default_model.clone(),
             messages: request.messages.iter().map(to_openai_message).collect(),
@@ -223,12 +285,24 @@ impl OpenAiClient {
             }),
             temperature: request.temperature,
             max_tokens: request.max_tokens,
+            stream,
         }
     }
 
     /// Send the request to the OpenAI-compatible API and parse the response.
     async fn send_request(&self, request: &OpenAiRequest) -> Result<ChatResponse, OpenAiError> {
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+
+        tracing::info!("LLM request to {url}: model={}, messages={}, tools={}",
+            request.model,
+            request.messages.len(),
+            request.tools.as_ref().map_or(0, |t| t.len()));
+
+        if let Some(tools) = &request.tools {
+            for t in tools {
+                tracing::debug!("  tool: {} - {}", t.function.name, t.function.description);
+            }
+        }
 
         let resp = self
             .http_client
@@ -252,13 +326,220 @@ impl OpenAiClient {
             });
         }
 
-        let openai_resp: OpenAiResponse = resp
-            .json()
+        // Log response body for debugging
+        let body_text = resp
+            .text()
             .await
             .map_err(|e| OpenAiError::Parse(e.to_string()))?;
+        let body_preview: String = body_text.chars().take(500).collect();
+        tracing::info!("LLM response (first 500 chars): {body_preview}");
+
+        let openai_resp: OpenAiResponse = serde_json::from_str(&body_text)
+            .map_err(|e| {
+                let err_preview: String = body_text.chars().take(200).collect();
+                format!("Parse error: {e}, body: {err_preview}")
+            })
+            .map_err(OpenAiError::Parse)?;
 
         from_openai_response(openai_resp)
     }
+
+    /// Send a streaming request to the OpenAI-compatible API and return
+    /// an mpsc receiver that emits [`StreamChunk`]s as SSE events arrive.
+    async fn send_stream_request(
+        &self,
+        request: &OpenAiRequest,
+    ) -> Result<tokio::sync::mpsc::Receiver<StreamChunk>, OpenAiError> {
+        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+
+        tracing::info!(
+            "LLM streaming request to {url}: model={}, messages={}, tools={}",
+            request.model,
+            request.messages.len(),
+            request.tools.as_ref().map_or(0, |t| t.len()),
+        );
+
+        let resp = self
+            .http_client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(request)
+            .send()
+            .await
+            .map_err(|e| OpenAiError::Http(e.to_string()))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp
+                .text()
+                .await
+                .unwrap_or_else(|_| "<cannot read body>".into());
+            return Err(OpenAiError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        let (tx, rx) = tokio::sync::mpsc::channel(256);
+        let my_tx = tx.clone();
+
+        tokio::spawn(async move {
+            let mut buf = String::new();
+            let mut stream = resp.bytes_stream();
+            // Accumulate tool call arguments across SSE chunks
+            let mut tool_call_args: HashMap<String, String> = HashMap::new();
+            let mut tool_call_names: HashMap<String, String> = HashMap::new();
+
+            // Helper: flush accumulated tool call arguments as ToolCallArguments chunks
+            let flush_tool_call_args = |tx: &tokio::sync::mpsc::Sender<StreamChunk>,
+                                        args: &HashMap<String, String>,
+                                        names: &HashMap<String, String>| {
+                for (id, _name) in names {
+                    if let Some(args_str) = args.get(id) {
+                        if let Ok(parsed) = serde_json::from_str(args_str) {
+                            let _ = tx.try_send(StreamChunk::ToolCallArguments {
+                                id: id.clone(),
+                                arguments: parsed,
+                            });
+                        }
+                    }
+                }
+            };
+
+            while let Some(chunk_result) = stream.next().await {
+                let bytes = match chunk_result {
+                    Ok(b) => b,
+                    Err(e) => {
+                        tracing::error!("SSE stream error: {e}");
+                        let _ = my_tx.try_send(StreamChunk::Error(e.to_string()));
+                        return;
+                    }
+                };
+
+                buf.push_str(&String::from_utf8_lossy(&bytes));
+
+                // Process all complete SSE events in the buffer
+                loop {
+                    let event = match extract_next_sse_event(&mut buf) {
+                        Some(e) => e,
+                        None => break,
+                    };
+
+                    if event.data == "[DONE]" {
+                        // Flush accumulated tool call arguments before done
+                        flush_tool_call_args(&my_tx, &tool_call_args, &tool_call_names);
+                        let _ = my_tx.try_send(StreamChunk::Done);
+                        return;
+                    }
+
+                    if event.event_type != "data" {
+                        continue;
+                    }
+
+                    let chunk: OpenAiStreamChunk = match serde_json::from_str(&event.data) {
+                        Ok(c) => c,
+                        Err(_) => continue,
+                    };
+
+                    if let Some(choice) = chunk.choices.into_iter().next() {
+                        // Emit content tokens as they arrive
+                        if let Some(text) = choice.delta.content {
+                            if !text.is_empty() {
+                                let _ = my_tx.try_send(StreamChunk::Token(text));
+                            }
+                        }
+                        // Reasoning models may emit `reasoning_content` in delta instead of
+                        // `content`.  Emit as a separate Reasoning chunk so the agent can
+                        // relay it to the frontend for collapsible UI display.
+                        if let Some(reasoning) = choice.delta.reasoning_content {
+                            if !reasoning.is_empty() {
+                                let _ = my_tx.try_send(StreamChunk::Reasoning(reasoning));
+                            }
+                        }
+
+                        // Handle tool call deltas
+                        if let Some(tc_deltas) = choice.delta.tool_calls {
+                            for tc in tc_deltas {
+                                let call_id = tc.id.clone().unwrap_or_default();
+
+                                // First delta for a new tool call — has id + name
+                                if let (Some(id), Some(func)) = (tc.id, &tc.function) {
+                                    if let Some(n) = &func.name {
+                                        tool_call_names.insert(id.clone(), n.clone());
+                                        let _ = my_tx.try_send(StreamChunk::ToolCallStart {
+                                            id: id.clone(),
+                                            name: n.clone(),
+                                        });
+                                    }
+                                    // May also contain first arguments fragment
+                                    if let Some(a) = &func.arguments {
+                                        if !a.is_empty() {
+                                            tool_call_args
+                                                .entry(id.clone())
+                                                .or_default()
+                                                .push_str(a);
+                                        }
+                                    }
+                                } else if let Some(func) = &tc.function {
+                                    // Subsequent deltas — arguments fragment
+                                    if let Some(a) = &func.arguments {
+                                        if !a.is_empty() && !call_id.is_empty() {
+                                            tool_call_args
+                                                .entry(call_id.clone())
+                                                .or_default()
+                                                .push_str(a);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // When finish_reason="tool_calls", flush arguments
+                        if let Some(ref reason) = choice.finish_reason {
+                            if reason == "tool_calls" {
+                                flush_tool_call_args(&my_tx, &tool_call_args, &tool_call_names);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        Ok(rx)
+    }
+}
+
+// ── SSE event parsing ─────────────────────────────────────────────────
+
+struct SseEvent {
+    event_type: String,
+    data: String,
+}
+
+/// Extracts the next complete SSE event from the buffer.
+/// SSE events are separated by \n\n. Returns `None` if no complete event
+/// is available.
+fn extract_next_sse_event(buf: &mut String) -> Option<SseEvent> {
+    let pos = buf.find("\n\n")?;
+    let raw = buf[..pos].to_string();
+    buf.drain(..=pos + 1); // remove event + "\n\n"
+
+    let mut event_type = String::from("data");
+    let mut data = String::new();
+
+    for line in raw.lines() {
+        if let Some(value) = line.strip_prefix("event: ") {
+            event_type = value.trim().to_string();
+        } else if let Some(value) = line.strip_prefix("data: ") {
+            if !data.is_empty() {
+                data.push('\n');
+            }
+            data.push_str(value);
+        }
+    }
+
+    Some(SseEvent { event_type, data })
 }
 
 // ── JSON mapping functions ─────────────────────────────────────────────
@@ -322,6 +603,7 @@ fn from_openai_response(resp: OpenAiResponse) -> Result<ChatResponse, OpenAiErro
     let chat_msg = ChatMessage {
         role: Role::Assistant,
         content: message.content,
+        reasoning_content: message.reasoning_content,
         tool_calls,
         tool_call_id: None,
     };
@@ -430,7 +712,7 @@ mod tests {
         };
 
         let client = OpenAiClient::new("http://x", "key", "gpt-4o");
-        let openai = client.build_request(&req);
+        let openai = client.build_request(&req, false);
 
         assert_eq!(openai.model, "gpt-4o");
         assert_eq!(openai.messages.len(), 2);
@@ -451,7 +733,7 @@ mod tests {
             max_tokens: None,
         };
         let client = OpenAiClient::new("http://x", "key", "gpt-4o");
-        let openai = client.build_request(&req);
+        let openai = client.build_request(&req, false);
         assert!(openai.tools.is_none());
         assert!(openai.temperature.is_none());
         assert!(openai.max_tokens.is_none());

@@ -50,6 +50,10 @@ pub struct ChatMessage {
     pub role: Role,
     /// Text content. `None` for assistant messages with only tool calls.
     pub content: Option<String>,
+    /// Reasoning content from reasoning models (e.g. DeepSeek-R1, mimo-v2.5).
+    /// This is the model's "thinking process" shown separately from the final answer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
     /// Tool calls made by the assistant (assistant messages only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
@@ -64,6 +68,7 @@ impl ChatMessage {
         Self {
             role: Role::System,
             content: Some(content.into()),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         }
@@ -74,6 +79,7 @@ impl ChatMessage {
         Self {
             role: Role::User,
             content: Some(content.into()),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         }
@@ -84,6 +90,7 @@ impl ChatMessage {
         Self {
             role: Role::Assistant,
             content: Some(content.into()),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         }
@@ -95,6 +102,7 @@ impl ChatMessage {
         Self {
             role: Role::Assistant,
             content: None,
+            reasoning_content: None,
             tool_calls: Some(tool_calls),
             tool_call_id: None,
         }
@@ -105,6 +113,7 @@ impl ChatMessage {
         Self {
             role: Role::Tool,
             content: Some(content.to_string()),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: Some(tool_call_id.to_string()),
         }
@@ -178,6 +187,9 @@ impl Clone for LlmError {
 pub enum StreamChunk {
     /// A text token from the LLM.
     Token(String),
+    /// Reasoning content from a reasoning model (e.g. DeepSeek-R1, mimo-v2.5).
+    /// This is the model's "thinking process" emitted separately from final tokens.
+    Reasoning(String),
     /// A tool call has started.
     ToolCallStart {
         /// Tool call ID.
@@ -189,6 +201,14 @@ pub enum StreamChunk {
     ToolCallEnd {
         /// Tool call ID.
         id: String,
+    },
+    /// A delta of tool call arguments from the LLM streaming API.
+    /// Contains the fully accumulated arguments JSON for a tool call.
+    ToolCallArguments {
+        /// Tool call ID.
+        id: String,
+        /// Complete parsed JSON arguments.
+        arguments: serde_json::Value,
     },
     /// The agent execution finished successfully.
     Done,

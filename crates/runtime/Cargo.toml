@@ -12,6 +12,8 @@ thiserror.workspace = true
 tokio.workspace = true
 reqwest.workspace = true
 async-trait.workspace = true
+tracing.workspace = true
+futures.workspace = true
 
 [dev-dependencies]
 wiremock.workspace = true

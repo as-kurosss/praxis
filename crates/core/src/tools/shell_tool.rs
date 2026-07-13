@@ -2,13 +2,13 @@
 
 use crate::agent::tool::{Tool, ToolError, ToolSpec};
 use serde_json::{json, Value};
+use std::time::Duration;
 
 /// A tool that executes shell commands.
 ///
 /// # Restrictions
-/// * Command timeout: 30 seconds
-/// * Max output: 100 KB
-/// * Only a single command (no pipes/chains by default)
+/// * Command timeout: [`timeout_secs`] (default: 30 seconds)
+/// * Only a single command when `allow_chaining` is `false` (no pipes/chains)
 ///
 /// # Arguments
 /// * `command` — shell command to execute
@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 pub struct ShellTool {
     /// Maximum execution time in seconds (default: 30).
     pub timeout_secs: u64,
-    /// Whether to allow shell pipe/chaining operators.
+    /// Whether to allow shell pipe/chaining operators (`|`, `&&`, `||`, `;`).
     pub allow_chaining: bool,
 }
 
@@ -70,16 +70,35 @@ impl Tool for ShellTool {
             });
         }
 
+        // Block chaining operators when not allowed
+        if !self.allow_chaining {
+            let chain_chars = ['|', ';', '&'];
+            if command.contains(chain_chars) {
+                return Err(ToolError::InvalidArgs {
+                    tool: "shell".into(),
+                    message: "chaining operators (|, ;, &) are disabled — set allow_chaining=true to enable".into(),
+                });
+            }
+        }
+
         // Use cmd /c on Windows
-        let output = tokio::process::Command::new(if cfg!(windows) { "cmd" } else { "sh" })
-            .arg(if cfg!(windows) { "/C" } else { "-c" })
-            .arg(command)
-            .output()
-            .await
-            .map_err(|e| ToolError::Execution {
-                tool: "shell".into(),
-                message: format!("failed to execute command: {e}"),
-            })?;
+        let timeout = Duration::from_secs(self.timeout_secs);
+        let output = tokio::time::timeout(timeout, async {
+            tokio::process::Command::new(if cfg!(windows) { "cmd" } else { "sh" })
+                .arg(if cfg!(windows) { "/C" } else { "-c" })
+                .arg(command)
+                .output()
+                .await
+        })
+        .await
+        .map_err(|_| ToolError::Execution {
+            tool: "shell".into(),
+            message: format!("command timed out after {}s", self.timeout_secs),
+        })?
+        .map_err(|e| ToolError::Execution {
+            tool: "shell".into(),
+            message: format!("failed to execute command: {e}"),
+        })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();

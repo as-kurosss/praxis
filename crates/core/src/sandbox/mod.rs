@@ -113,30 +113,76 @@ impl<T: Tool + Send + Sync> Tool for GovernedTool<T> {
         })?;
 
         // Phase 2: Execute via sandbox or forward to inner tool
-        if use_sandbox && category == ToolCategory::Shell {
-            let command = args
-                .get("command")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| ToolError::InvalidArgs {
-                    tool: name.clone(),
-                    message: "missing 'command' string".into(),
+        match (use_sandbox, category) {
+            (true, ToolCategory::Shell) => {
+                let command = args
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| ToolError::InvalidArgs {
+                        tool: name.clone(),
+                        message: "missing 'command' string".into(),
+                    })?;
+
+                let output = self.sandbox.execute_shell(command, std::time::Duration::from_secs(30)).await.map_err(|e| {
+                    ToolError::AccessDenied {
+                        tool: name.clone(),
+                        reason: format!("sandbox: {e}"),
+                    }
                 })?;
 
-            let output = self.sandbox.execute_shell(command, std::time::Duration::from_secs(30)).await.map_err(|e| {
-                ToolError::AccessDenied {
-                    tool: name.clone(),
-                    reason: format!("sandbox: {e}"),
-                }
-            })?;
+                Ok(serde_json::json!({
+                    "stdout": output.stdout,
+                    "stderr": output.stderr,
+                    "exit_code": output.exit_code,
+                }))
+            }
+            (true, ToolCategory::FileRead) => {
+                let path_str = args
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| ToolError::InvalidArgs {
+                        tool: name.clone(),
+                        message: "missing 'path' string".into(),
+                    })?;
 
-            return Ok(serde_json::json!({
-                "stdout": output.stdout,
-                "stderr": output.stderr,
-                "exit_code": output.exit_code,
-            }));
+                let data = self.sandbox.read_file(std::path::Path::new(path_str)).await.map_err(|e| {
+                    ToolError::AccessDenied {
+                        tool: name.clone(),
+                        reason: format!("sandbox: {e}"),
+                    }
+                })?;
+
+                Ok(serde_json::json!({
+                    "data": String::from_utf8_lossy(&data),
+                    "path": path_str,
+                }))
+            }
+            (true, ToolCategory::FileWrite) => {
+                let path_str = args
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| ToolError::InvalidArgs {
+                        tool: name.clone(),
+                        message: "missing 'path' string".into(),
+                    })?;
+                let data = args
+                    .get("data")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+
+                self.sandbox.write_file(std::path::Path::new(path_str), data.as_bytes()).await.map_err(|e| {
+                    ToolError::AccessDenied {
+                        tool: name.clone(),
+                        reason: format!("sandbox: {e}"),
+                    }
+                })?;
+
+                Ok(serde_json::json!({"path": path_str, "written": true}))
+            }
+            _ => {
+                // Default: pass through to inner tool for non-sandboxed categories
+                self.inner.call(args).await
+            }
         }
-
-        // Default: pass through to inner tool
-        self.inner.call(args).await
     }
 }
