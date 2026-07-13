@@ -38,9 +38,15 @@ struct GeminiContent {
 #[derive(Serialize)]
 #[serde(untagged)]
 enum GeminiPart {
-    Text { text: String },
-    FunctionCall { function_call: GeminiFunctionCall },
-    FunctionResponse { function_response: GeminiFunctionResponse },
+    Text {
+        text: String,
+    },
+    FunctionCall {
+        function_call: GeminiFunctionCall,
+    },
+    FunctionResponse {
+        function_response: GeminiFunctionResponse,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -138,7 +144,9 @@ impl From<GeminiError> for LlmError {
             GeminiError::Api { status, body } => LlmError::Api(format!("HTTP {status}: {body}")),
             GeminiError::Parse(msg) => LlmError::Parse(msg),
             GeminiError::MissingApiKey => LlmError::Request("GEMINI_API_KEY not set".into()),
-            GeminiError::NoCandidates => LlmError::Request("no candidates in Gemini response".into()),
+            GeminiError::NoCandidates => {
+                LlmError::Request("no candidates in Gemini response".into())
+            }
         }
     }
 }
@@ -177,7 +185,10 @@ impl GeminiClient {
         )
     }
 
-    fn convert_messages(&self, request: &ChatRequest) -> (Option<GeminiContent>, Vec<GeminiContent>) {
+    fn convert_messages(
+        &self,
+        request: &ChatRequest,
+    ) -> (Option<GeminiContent>, Vec<GeminiContent>) {
         let mut sys_instruction = None;
         let mut contents = Vec::new();
 
@@ -301,14 +312,16 @@ impl GeminiClient {
 impl LlmClient for GeminiClient {
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, LlmError> {
         let (sys_instruction, contents) = self.convert_messages(&request);
-        let gemini_tools = Self::convert_tools(
-            request.tools.as_deref().unwrap_or(&[]),
-        );
+        let gemini_tools = Self::convert_tools(request.tools.as_deref().unwrap_or(&[]));
 
         let gemini_request = GeminiRequest {
             system_instruction: sys_instruction,
             contents,
-            tools: if gemini_tools.is_empty() { None } else { Some(gemini_tools) },
+            tools: if gemini_tools.is_empty() {
+                None
+            } else {
+                Some(gemini_tools)
+            },
             generation_config: Some(GeminiGenerationConfig {
                 temperature: request.temperature,
                 max_output_tokens: request.max_tokens,

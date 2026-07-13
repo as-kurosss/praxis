@@ -48,11 +48,7 @@ pub struct GovernedTool<T: Tool> {
 
 impl<T: Tool> GovernedTool<T> {
     /// Wrap a tool with policy and sandbox restrictions.
-    pub fn new(
-        inner: T,
-        policy: Arc<dyn ResourcePolicy>,
-        sandbox: Arc<dyn Sandbox>,
-    ) -> Self {
+    pub fn new(inner: T, policy: Arc<dyn ResourcePolicy>, sandbox: Arc<dyn Sandbox>) -> Self {
         Self {
             inner,
             policy,
@@ -61,7 +57,11 @@ impl<T: Tool> GovernedTool<T> {
     }
 
     /// Run policy checks and route through sandbox if applicable.
-    fn check_and_sandbox(&self, category: ToolCategory, args: &serde_json::Value) -> std::result::Result<bool, crate::error::Error> {
+    fn check_and_sandbox(
+        &self,
+        category: ToolCategory,
+        args: &serde_json::Value,
+    ) -> std::result::Result<bool, crate::error::Error> {
         match category {
             ToolCategory::Shell => {
                 if let Some(cmd) = args.get("command").and_then(|v| v.as_str()) {
@@ -99,18 +99,21 @@ impl<T: Tool + Send + Sync> Tool for GovernedTool<T> {
         self.inner.spec()
     }
 
-    async fn call(&self, args: serde_json::Value) -> std::result::Result<serde_json::Value, ToolError> {
+    async fn call(
+        &self,
+        args: serde_json::Value,
+    ) -> std::result::Result<serde_json::Value, ToolError> {
         let spec = self.inner.spec();
         let name = spec.name;
         let category = spec.category;
 
         // Phase 1: Policy check + sandbox routing decision
-        let use_sandbox = self.check_and_sandbox(category, &args).map_err(|e| {
-            ToolError::AccessDenied {
-                tool: name.clone(),
-                reason: format!("{e}"),
-            }
-        })?;
+        let use_sandbox =
+            self.check_and_sandbox(category, &args)
+                .map_err(|e| ToolError::AccessDenied {
+                    tool: name.clone(),
+                    reason: format!("{e}"),
+                })?;
 
         // Phase 2: Execute via sandbox or forward to inner tool
         match (use_sandbox, category) {
@@ -123,12 +126,14 @@ impl<T: Tool + Send + Sync> Tool for GovernedTool<T> {
                         message: "missing 'command' string".into(),
                     })?;
 
-                let output = self.sandbox.execute_shell(command, std::time::Duration::from_secs(30)).await.map_err(|e| {
-                    ToolError::AccessDenied {
+                let output = self
+                    .sandbox
+                    .execute_shell(command, std::time::Duration::from_secs(30))
+                    .await
+                    .map_err(|e| ToolError::AccessDenied {
                         tool: name.clone(),
                         reason: format!("sandbox: {e}"),
-                    }
-                })?;
+                    })?;
 
                 Ok(serde_json::json!({
                     "stdout": output.stdout,
@@ -137,20 +142,21 @@ impl<T: Tool + Send + Sync> Tool for GovernedTool<T> {
                 }))
             }
             (true, ToolCategory::FileRead) => {
-                let path_str = args
-                    .get("path")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| ToolError::InvalidArgs {
+                let path_str = args.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
+                    ToolError::InvalidArgs {
                         tool: name.clone(),
                         message: "missing 'path' string".into(),
-                    })?;
-
-                let data = self.sandbox.read_file(std::path::Path::new(path_str)).await.map_err(|e| {
-                    ToolError::AccessDenied {
-                        tool: name.clone(),
-                        reason: format!("sandbox: {e}"),
                     }
                 })?;
+
+                let data = self
+                    .sandbox
+                    .read_file(std::path::Path::new(path_str))
+                    .await
+                    .map_err(|e| ToolError::AccessDenied {
+                        tool: name.clone(),
+                        reason: format!("sandbox: {e}"),
+                    })?;
 
                 Ok(serde_json::json!({
                     "data": String::from_utf8_lossy(&data),
@@ -158,24 +164,24 @@ impl<T: Tool + Send + Sync> Tool for GovernedTool<T> {
                 }))
             }
             (true, ToolCategory::FileWrite) => {
-                let path_str = args
-                    .get("path")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| ToolError::InvalidArgs {
+                let path_str = args.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
+                    ToolError::InvalidArgs {
                         tool: name.clone(),
                         message: "missing 'path' string".into(),
-                    })?;
+                    }
+                })?;
                 let data = args
                     .get("data")
                     .and_then(|v| v.as_str())
                     .unwrap_or_default();
 
-                self.sandbox.write_file(std::path::Path::new(path_str), data.as_bytes()).await.map_err(|e| {
-                    ToolError::AccessDenied {
+                self.sandbox
+                    .write_file(std::path::Path::new(path_str), data.as_bytes())
+                    .await
+                    .map_err(|e| ToolError::AccessDenied {
                         tool: name.clone(),
                         reason: format!("sandbox: {e}"),
-                    }
-                })?;
+                    })?;
 
                 Ok(serde_json::json!({"path": path_str, "written": true}))
             }

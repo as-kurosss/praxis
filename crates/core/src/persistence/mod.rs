@@ -16,8 +16,8 @@
 
 use crate::error::Result;
 use crate::loops::GraphSnapshot;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::path::Path;
 
 /// Save any serializable value to a JSON file.
@@ -45,7 +45,10 @@ pub fn load_json<T: DeserializeOwned>(path: impl AsRef<Path>) -> Result<T> {
 ///
 /// # Errors
 /// Returns an error if serialization or file I/O fails.
-pub fn save_snapshot<S: Serialize>(path: impl AsRef<Path>, snapshot: &GraphSnapshot<S>) -> Result<()> {
+pub fn save_snapshot<S: Serialize>(
+    path: impl AsRef<Path>,
+    snapshot: &GraphSnapshot<S>,
+) -> Result<()> {
     save_json(path, snapshot)
 }
 
@@ -62,7 +65,9 @@ pub fn load_snapshot<S: DeserializeOwned>(path: impl AsRef<Path>) -> Result<Grap
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::loops::{Context, CycleType, GraphSnapshot, LoopId, LoopResult, NodeId, StopCondition, StopReason};
+    use crate::loops::{
+        Context, CycleType, GraphSnapshot, LoopId, LoopResult, NodeId, StopCondition, StopReason,
+    };
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Duration;
@@ -124,10 +129,7 @@ mod tests {
         let loaded: Context<String> = serde_json::from_str(&json).unwrap();
         assert_eq!(loaded.input, "hello");
         assert_eq!(loaded.cycle_type, CycleType::Goal);
-        assert_eq!(
-            loaded.stop_condition.max_iterations,
-            Some(10)
-        );
+        assert_eq!(loaded.stop_condition.max_iterations, Some(10));
         // Duration roundtrip: 30s = 30000ms
         assert!(loaded.stop_condition.timeout.is_some());
     }
@@ -186,7 +188,10 @@ mod tests {
         };
         let json = serde_json::to_string(&config).unwrap();
         // scroll_strategy should not appear in the JSON
-        assert!(!json.contains("scroll_strategy"), "scroll_strategy should be skipped in serialization");
+        assert!(
+            !json.contains("scroll_strategy"),
+            "scroll_strategy should be skipped in serialization"
+        );
     }
 
     #[test]
