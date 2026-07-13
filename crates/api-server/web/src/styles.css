@@ -212,3 +212,82 @@ body {
 .toast-error { background: var(--red); color: #fff; }
 .toast-success { background: var(--accent); color: #fff; }
 @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+/* ── Code blocks ──────────────────────────────────────────── */
+.code-block {
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.code-header {
+  padding: 4px 10px;
+  font-size: 10px;
+  color: var(--text2);
+  background: rgba(255,255,255,.04);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border);
+}
+.code-block pre {
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-x: auto;
+  background: rgba(0,0,0,.2);
+  margin: 0;
+}
+.code-block code {
+  font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
+}
+
+/* ── Approval cards ───────────────────────────────────────── */
+.approval-area {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.approval-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  background: rgba(255,255,255,.03);
+}
+.approval-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+.approval-card-args {
+  font-family: monospace;
+  font-size: 11px;
+  padding: 6px;
+  background: rgba(0,0,0,.2);
+  border-radius: var(--radius-sm);
+  margin-bottom: 6px;
+  max-height: 120px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.approval-card-actions {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+/* ── Additional provider badges ───────────────────────────── */
+.badge-custom { background: #6366f1; color: #fff; }
+.badge-lm_studio { background: #f97316; color: #fff; }
+
+/* ── Sidebar responsive ───────────────────────────────────── */
+@media (max-width: 768px) {
+  .sidebar { width: 240px; min-width: 240px; }
+}
+
+/* ── Scrollbar styling for logs ──────────────────────────── */
+.log-container::-webkit-scrollbar { width: 4px; }
+.log-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }

@@ -18,23 +18,33 @@
 //! | `GET` | `/api/agents/{id}/chat/stream` | SSE stream chat |
 //! | `GET` | `/api/agents/{id}/sessions` | List sessions for an agent |
 //! | `DELETE` | `/api/sessions/{id}` | Delete a session |
+//! | `GET` | `/api/skills` | List skills |
+//! | `POST` | `/api/skills` | Add a skill |
+//! | `DELETE` | `/api/skills/{id}` | Delete a skill |
+//! | `POST` | `/api/skills/{id}/toggle` | Toggle skill enabled |
+//! | `POST` | `/api/skills/import` | Import a skill from URL |
+//! | `GET` | `/api/settings` | Get settings |
+//! | `PUT` | `/api/settings` | Update settings |
+//! | `GET` | `/api/memory/search` | Search memory |
+//! | `GET` | `/api/security/policies` | List security policies |
+//! | `GET` | `/api/observe/traces` | List traces |
+//! | `GET` | `/api/logs` | List log entries |
+//! | `GET` | `/api/sessions/{id}/title` | Get session title |
+//! | `PUT` | `/api/sessions/{id}/title` | Update session title |
 
 use crate::state::AppState;
 use axum::{
-    extract::{Path, State},
-    http::StatusCode,
-    response::{sse::Event, Json, Sse},
-    routing::{get, post, put},
     Router,
+    extract::{Path, Query, State},
+    http::StatusCode,
+    response::{Json, Sse, sse::Event},
+    routing::{delete, get, post, put},
 };
-use tower_http::services::{ServeDir, ServeFile};
-use praxis_core::agent::{
-    Agent, AgentConfig, ChatMessage, StreamChunk, ToolSet,
-};
+use futures::stream::{self, StreamExt};
+use praxis_core::agent::{Agent, AgentConfig, ChatMessage, StreamChunk, ToolSet};
 use praxis_core::loops::{Context, CycleType, Loop, LoopId, StopCondition};
 use praxis_core::registry::{
-    AgentDefinition, ProviderConfig, ProviderKind, ScrollConfig, Session,
-    ToolBinding,
+    AgentDefinition, ProviderConfig, ProviderKind, ScrollConfig, Session, ToolBinding,
 };
 use praxis_core::tools::{CalculatorTool, CustomTool, TimeTool};
 use praxis_runtime::{AnthropicClient, GeminiClient, OpenAiClient};
@@ -42,7 +52,7 @@ use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::time::Duration;
 use tokio_stream::wrappers::ReceiverStream;
-use futures::stream::{self, StreamExt};
+use tower_http::services::{ServeDir, ServeFile};
 
 // ── Response wrapper ──────────────────────────────────────────────────
 
@@ -55,12 +65,20 @@ struct ApiResponse<T: Serialize> {
 
 impl<T: Serialize> ApiResponse<T> {
     fn ok(data: T) -> Json<Self> {
-        Json(Self { success: true, data: Some(data), error: None })
+        Json(Self {
+            success: true,
+            data: Some(data),
+            error: None,
+        })
     }
     fn err(msg: impl Into<String>) -> (StatusCode, Json<Self>) {
         (
             StatusCode::BAD_REQUEST,
-            Json(Self { success: false, data: None, error: Some(msg.into()) }),
+            Json(Self {
+                success: false,
+                data: None,
+                error: Some(msg.into()),
+            }),
         )
     }
 }
@@ -140,22 +158,49 @@ struct SessionSummaryResponse {
 pub fn router(state: AppState) -> Router {
     let dist_dir = state.dist_dir.clone();
 
-    let serve_dir = ServeDir::new(&dist_dir)
-        .fallback(ServeFile::new(dist_dir.join("index.html")));
+    let serve_dir = ServeDir::new(&dist_dir).fallback(ServeFile::new(dist_dir.join("index.html")));
 
     Router::new()
         // Provider CRUD
         .route("/api/providers", get(list_providers).post(create_provider))
-        .route("/api/providers/{id}", put(update_provider).delete(delete_provider))
+        .route(
+            "/api/providers/{id}",
+            put(update_provider).delete(delete_provider),
+        )
         // Agent CRUD
         .route("/api/agents", get(list_agents).post(create_agent))
-        .route("/api/agents/{id}", get(get_agent).put(update_agent).delete(delete_agent))
+        .route(
+            "/api/agents/{id}",
+            get(get_agent).put(update_agent).delete(delete_agent),
+        )
         // Chat
         .route("/api/agents/{id}/chat", post(chat_handler))
         .route("/api/agents/{id}/chat/stream", get(chat_stream_handler))
         // Sessions
         .route("/api/agents/{id}/sessions", get(list_sessions))
-        .route("/api/sessions/{id}", get(get_session_detail).delete(delete_session))
+        .route(
+            "/api/sessions/{id}",
+            get(get_session_detail).delete(delete_session),
+        )
+        .route(
+            "/api/sessions/{id}/title",
+            get(get_session_title).put(update_session_title),
+        )
+        // Skills
+        .route("/api/skills", get(list_skills).post(create_skill))
+        .route("/api/skills/{id}", delete(delete_skill))
+        .route("/api/skills/{id}/toggle", post(toggle_skill))
+        .route("/api/skills/import", post(import_skill))
+        // Settings
+        .route("/api/settings", get(get_settings).put(update_settings))
+        // Memory
+        .route("/api/memory/search", get(search_memory))
+        // Security
+        .route("/api/security/policies", get(list_security_policies))
+        // Observability
+        .route("/api/observe/traces", get(list_traces))
+        // Logs
+        .route("/api/logs", get(list_logs))
         .with_state(state)
         // Static files (SPA)
         .fallback_service(serve_dir)
@@ -167,14 +212,22 @@ fn build_tool_set(tools: &[ToolBinding]) -> ToolSet {
     let mut ts = ToolSet::new();
     for binding in tools {
         match binding {
-            ToolBinding::Builtin { name, enabled: true } => {
+            ToolBinding::Builtin {
+                name,
+                enabled: true,
+            } => {
                 match name.as_str() {
                     "calculator" => ts.add(CalculatorTool),
                     "time" | "current_time" => ts.add(TimeTool),
                     _ => { /* unknown builtin — skip */ }
                 }
             }
-            ToolBinding::Custom { name, description, schema, enabled: true } => {
+            ToolBinding::Custom {
+                name,
+                description,
+                schema,
+                enabled: true,
+            } => {
                 ts.add(CustomTool::new(name, description, schema.clone()));
             }
             _ => {}
@@ -186,10 +239,14 @@ fn build_tool_set(tools: &[ToolBinding]) -> ToolSet {
 fn scroll_strategy(config: &ScrollConfig) -> Option<praxis_core::memory::ScrollStrategy> {
     match config {
         ScrollConfig::Truncate { max_messages } => {
-            Some(praxis_core::memory::ScrollStrategy::Truncate { max_messages: *max_messages })
+            Some(praxis_core::memory::ScrollStrategy::Truncate {
+                max_messages: *max_messages,
+            })
         }
         ScrollConfig::SlidingWindow { window_size } => {
-            Some(praxis_core::memory::ScrollStrategy::SlidingWindow { window_size: *window_size })
+            Some(praxis_core::memory::ScrollStrategy::SlidingWindow {
+                window_size: *window_size,
+            })
         }
         ScrollConfig::NoOp => None,
     }
@@ -228,7 +285,10 @@ async fn run_agent_execution(
             agent.execute(ctx, state).await
         }
         ProviderKind::Anthropic => {
-            let url = provider.api_url.as_deref().unwrap_or("https://api.anthropic.com/v1");
+            let url = provider
+                .api_url
+                .as_deref()
+                .unwrap_or("https://api.anthropic.com/v1");
             let client = AnthropicClient::new(url, &provider.api_key, &provider.model);
             let agent = Agent::with_tools(client, config, tool_set);
             agent.execute(ctx, state).await
@@ -256,7 +316,10 @@ async fn run_agent_streaming(
             agent.execute_stream(ctx, state, tx).await
         }
         ProviderKind::Anthropic => {
-            let url = provider.api_url.as_deref().unwrap_or("https://api.anthropic.com/v1");
+            let url = provider
+                .api_url
+                .as_deref()
+                .unwrap_or("https://api.anthropic.com/v1");
             let client = AnthropicClient::new(url, &provider.api_key, &provider.model);
             let agent = Agent::with_tools(client, config, tool_set);
             agent.execute_stream(ctx, state, tx).await
@@ -271,9 +334,7 @@ async fn run_agent_streaming(
 
 // ── Provider CRUD ────────────────────────────────────────────────────
 
-async fn list_providers(
-    State(state): State<AppState>,
-) -> Json<ApiResponse<Vec<ProviderConfig>>> {
+async fn list_providers(State(state): State<AppState>) -> Json<ApiResponse<Vec<ProviderConfig>>> {
     ApiResponse::ok(state.registry.list_providers())
 }
 
@@ -291,9 +352,10 @@ async fn create_provider(
         model: body.model,
         notes: None,
     };
-    state.registry.upsert_provider(config.clone()).map_err(|e| {
-        ApiResponse::err(format!("Failed to save provider: {e}"))
-    })?;
+    state
+        .registry
+        .upsert_provider(config.clone())
+        .map_err(|e| ApiResponse::err(format!("Failed to save provider: {e}")))?;
     Ok(ApiResponse::ok(config))
 }
 
@@ -311,9 +373,10 @@ async fn update_provider(
         model: body.model,
         notes: None,
     };
-    state.registry.upsert_provider(config.clone()).map_err(|e| {
-        ApiResponse::err(format!("Failed to save provider: {e}"))
-    })?;
+    state
+        .registry
+        .upsert_provider(config.clone())
+        .map_err(|e| ApiResponse::err(format!("Failed to save provider: {e}")))?;
     Ok(ApiResponse::ok(config))
 }
 
@@ -321,17 +384,16 @@ async fn delete_provider(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<bool>>, (StatusCode, Json<ApiResponse<bool>>)> {
-    state.registry.delete_provider(&id).map_err(|e| {
-        ApiResponse::err(format!("Failed to delete provider: {e}"))
-    })?;
+    state
+        .registry
+        .delete_provider(&id)
+        .map_err(|e| ApiResponse::err(format!("Failed to delete provider: {e}")))?;
     Ok(ApiResponse::ok(true))
 }
 
 // ── Agent CRUD ───────────────────────────────────────────────────────
 
-async fn list_agents(
-    State(state): State<AppState>,
-) -> Json<ApiResponse<Vec<AgentSummary>>> {
+async fn list_agents(State(state): State<AppState>) -> Json<ApiResponse<Vec<AgentSummary>>> {
     let agents = state.registry.list_agents();
     let summaries: Vec<AgentSummary> = agents
         .into_iter()
@@ -378,9 +440,10 @@ async fn create_agent(
         created_at: now.clone(),
         updated_at: now,
     };
-    state.registry.upsert_agent(def.clone()).map_err(|e| {
-        ApiResponse::err(format!("Failed to save agent: {e}"))
-    })?;
+    state
+        .registry
+        .upsert_agent(def.clone())
+        .map_err(|e| ApiResponse::err(format!("Failed to save agent: {e}")))?;
     Ok(ApiResponse::ok(def))
 }
 
@@ -410,9 +473,10 @@ async fn update_agent(
         created_at,
         updated_at: now,
     };
-    state.registry.upsert_agent(def.clone()).map_err(|e| {
-        ApiResponse::err(format!("Failed to save agent: {e}"))
-    })?;
+    state
+        .registry
+        .upsert_agent(def.clone())
+        .map_err(|e| ApiResponse::err(format!("Failed to save agent: {e}")))?;
     Ok(ApiResponse::ok(def))
 }
 
@@ -420,9 +484,10 @@ async fn delete_agent(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<bool>>, (StatusCode, Json<ApiResponse<bool>>)> {
-    state.registry.delete_agent(&id).map_err(|e| {
-        ApiResponse::err(format!("Failed to delete agent: {e}"))
-    })?;
+    state
+        .registry
+        .delete_agent(&id)
+        .map_err(|e| ApiResponse::err(format!("Failed to delete agent: {e}")))?;
     Ok(ApiResponse::ok(true))
 }
 
@@ -458,9 +523,9 @@ async fn chat_handler(
     };
 
     // 5. Get or create session
-    let session_id = body.session_id.unwrap_or_else(|| {
-        format!("sess_{}", uuid::Uuid::new_v4())
-    });
+    let session_id = body
+        .session_id
+        .unwrap_or_else(|| format!("sess_{}", uuid::Uuid::new_v4()));
 
     // 6. Build context
     let ctx = Context::new(
@@ -495,7 +560,10 @@ async fn chat_handler(
             session_id,
             message: output,
         })),
-        None => Err(ApiResponse::err(format!("Agent failed: {:?}", result.status))),
+        None => Err(ApiResponse::err(format!(
+            "Agent failed: {:?}",
+            result.status
+        ))),
     }
 }
 
@@ -527,9 +595,9 @@ async fn chat_stream_handler(
         scroll_strategy: scroll_strategy(&def.scroll_strategy),
     };
 
-    let session_id = params.session_id.unwrap_or_else(|| {
-        format!("sess_{}", uuid::Uuid::new_v4())
-    });
+    let session_id = params
+        .session_id
+        .unwrap_or_else(|| format!("sess_{}", uuid::Uuid::new_v4()));
 
     let ctx = Context::new(
         LoopId::new(),
@@ -552,8 +620,14 @@ async fn chat_stream_handler(
 
     tokio::spawn(async move {
         let _result = run_agent_streaming(
-            &provider, config, tool_set, ctx, &mut state_messages, tx.clone(),
-        ).await;
+            &provider,
+            config,
+            tool_set,
+            ctx,
+            &mut state_messages,
+            tx.clone(),
+        )
+        .await;
 
         // IMPORTANT: Drop the original tx sender IMMEDIATELY after streaming
         // completes, BEFORE saving the session.  The Sse stream wraps rx
@@ -577,38 +651,26 @@ async fn chat_stream_handler(
 
     // Prepend a session_id event so the frontend knows the session
     let session_event = stream::once(async move {
-        Ok(Event::default().data(session_id_for_event).event("session_id"))
+        Ok(Event::default()
+            .data(session_id_for_event)
+            .event("session_id"))
     });
 
     let stream = session_event.chain(ReceiverStream::new(rx).map(|chunk| {
         match chunk {
-            StreamChunk::Token(text) => {
-                Ok(Event::default().data(text).event("token"))
-            }
-            StreamChunk::Reasoning(text) => {
-                Ok(Event::default().data(text).event("reasoning"))
-            }
-            StreamChunk::ToolCallStart { id, name } => {
-                Ok(Event::default()
-                    .data(serde_json::json!({"id": id, "name": name}).to_string())
-                    .event("tool_call_start"))
-            }
-            StreamChunk::ToolCallEnd { id } => {
-                Ok(Event::default()
-                    .data(serde_json::json!({"id": id}).to_string())
-                    .event("tool_call_end"))
-            }
-            StreamChunk::ToolCallArguments { id, arguments } => {
-                Ok(Event::default()
-                    .data(serde_json::json!({"id": id, "arguments": arguments}).to_string())
-                    .event("tool_call_arguments"))
-            }
-            StreamChunk::Done => {
-                Ok(Event::default().data("").event("done"))
-            }
-            StreamChunk::Error(msg) => {
-                Ok(Event::default().data(msg).event("error"))
-            }
+            StreamChunk::Token(text) => Ok(Event::default().data(text).event("token")),
+            StreamChunk::Reasoning(text) => Ok(Event::default().data(text).event("reasoning")),
+            StreamChunk::ToolCallStart { id, name } => Ok(Event::default()
+                .data(serde_json::json!({"id": id, "name": name}).to_string())
+                .event("tool_call_start")),
+            StreamChunk::ToolCallEnd { id } => Ok(Event::default()
+                .data(serde_json::json!({"id": id}).to_string())
+                .event("tool_call_end")),
+            StreamChunk::ToolCallArguments { id, arguments } => Ok(Event::default()
+                .data(serde_json::json!({"id": id, "arguments": arguments}).to_string())
+                .event("tool_call_arguments")),
+            StreamChunk::Done => Ok(Event::default().data("").event("done")),
+            StreamChunk::Error(msg) => Ok(Event::default().data(msg).event("error")),
         }
     }));
 
@@ -685,9 +747,365 @@ async fn delete_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<bool>>, (StatusCode, Json<ApiResponse<bool>>)> {
-    state.sessions.delete_session(&id).map_err(|e| {
-        ApiResponse::err(format!("Failed to delete session: {e}"))
-    })?;
+    state
+        .sessions
+        .delete_session(&id)
+        .map_err(|e| ApiResponse::err(format!("Failed to delete session: {e}")))?;
     Ok(ApiResponse::ok(true))
 }
 
+// ── Session Title ────────────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize)]
+struct SessionTitleRequest {
+    title: String,
+}
+
+async fn get_session_title(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<ApiResponse<Option<String>>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let session = state
+        .sessions
+        .get_session(&id)
+        .ok_or_else(|| ApiResponse::err(format!("Session '{id}' not found")))?;
+    Ok(ApiResponse::ok(session.title))
+}
+
+async fn update_session_title(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    axum::Json(body): axum::Json<SessionTitleRequest>,
+) -> Result<Json<ApiResponse<bool>>, (StatusCode, Json<ApiResponse<bool>>)> {
+    let mut session = state
+        .sessions
+        .get_session(&id)
+        .ok_or_else(|| ApiResponse::err(format!("Session '{id}' not found")))?;
+    session.title = Some(body.title);
+    session.updated_at = praxis_core::registry::timestamp();
+    state
+        .sessions
+        .upsert_session(session)
+        .map_err(|e| ApiResponse::err(format!("Failed to update session title: {e}")))?;
+    Ok(ApiResponse::ok(true))
+}
+
+// ── Skills (in-memory store) ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SkillEntry {
+    id: String,
+    name: String,
+    description: String,
+    enabled: bool,
+    source_url: Option<String>,
+    version: Option<String>,
+    created_at: String,
+}
+
+#[derive(Deserialize)]
+struct CreateSkillRequest {
+    name: String,
+    description: String,
+    source_url: Option<String>,
+    version: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ToggleSkillRequest {
+    enabled: bool,
+}
+
+#[derive(Deserialize)]
+struct ImportSkillRequest {
+    url: String,
+}
+
+static SKILLS: std::sync::LazyLock<std::sync::Mutex<Vec<SkillEntry>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(Vec::new()));
+
+async fn list_skills() -> Json<ApiResponse<Vec<SkillEntry>>> {
+    let skills = SKILLS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    ApiResponse::ok(skills)
+}
+
+async fn create_skill(
+    axum::Json(body): axum::Json<CreateSkillRequest>,
+) -> Json<ApiResponse<SkillEntry>> {
+    let entry = SkillEntry {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: body.name,
+        description: body.description,
+        enabled: true,
+        source_url: body.source_url,
+        version: body.version,
+        created_at: praxis_core::registry::timestamp(),
+    };
+    SKILLS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(entry.clone());
+    ApiResponse::ok(entry)
+}
+
+async fn delete_skill(Path(id): Path<String>) -> Json<ApiResponse<bool>> {
+    let mut skills = SKILLS.lock().unwrap_or_else(|e| e.into_inner());
+    let len_before = skills.len();
+    skills.retain(|s| s.id != id);
+    ApiResponse::ok(skills.len() < len_before)
+}
+
+async fn toggle_skill(
+    Path(id): Path<String>,
+    axum::Json(body): axum::Json<ToggleSkillRequest>,
+) -> Result<Json<ApiResponse<bool>>, (StatusCode, Json<ApiResponse<bool>>)> {
+    let mut skills = SKILLS.lock().unwrap_or_else(|e| e.into_inner());
+    let skill = skills
+        .iter_mut()
+        .find(|s| s.id == id)
+        .ok_or_else(|| ApiResponse::err(format!("Skill '{id}' not found")))?;
+    skill.enabled = body.enabled;
+    Ok(ApiResponse::ok(true))
+}
+
+async fn import_skill(
+    axum::Json(body): axum::Json<ImportSkillRequest>,
+) -> Result<Json<ApiResponse<SkillEntry>>, (StatusCode, Json<ApiResponse<()>>)> {
+    // Stub: create a skill entry from a URL without actually fetching
+    let name = body.url.rsplit('/').next().unwrap_or(&body.url).to_string();
+    let entry = SkillEntry {
+        id: uuid::Uuid::new_v4().to_string(),
+        name,
+        description: format!("Imported from {}", body.url),
+        enabled: true,
+        source_url: Some(body.url),
+        version: None,
+        created_at: praxis_core::registry::timestamp(),
+    };
+    SKILLS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(entry.clone());
+    Ok(ApiResponse::ok(entry))
+}
+
+// ── Settings (in-memory store) ────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AppSettings {
+    default_scroll_strategy: ScrollConfig,
+    default_model: String,
+    default_temperature: Option<f32>,
+    default_max_tokens: Option<u32>,
+    theme: String,
+    language: String,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            default_scroll_strategy: ScrollConfig::Truncate { max_messages: 50 },
+            default_model: "gpt-4o".into(),
+            default_temperature: None,
+            default_max_tokens: None,
+            theme: "dark".into(),
+            language: "en".into(),
+        }
+    }
+}
+
+static SETTINGS: std::sync::LazyLock<std::sync::Mutex<AppSettings>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(AppSettings::default()));
+
+async fn get_settings() -> Json<ApiResponse<AppSettings>> {
+    let settings = SETTINGS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    ApiResponse::ok(settings)
+}
+
+#[derive(Deserialize)]
+struct UpdateSettingsRequest {
+    default_scroll_strategy: Option<ScrollConfig>,
+    default_model: Option<String>,
+    default_temperature: Option<Option<f32>>,
+    default_max_tokens: Option<Option<u32>>,
+    theme: Option<String>,
+    language: Option<String>,
+}
+
+async fn update_settings(
+    axum::Json(body): axum::Json<UpdateSettingsRequest>,
+) -> Json<ApiResponse<AppSettings>> {
+    let mut settings = SETTINGS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(scroll) = body.default_scroll_strategy {
+        settings.default_scroll_strategy = scroll;
+    }
+    if let Some(model) = body.default_model {
+        settings.default_model = model;
+    }
+    if let Some(temp) = body.default_temperature {
+        settings.default_temperature = temp;
+    }
+    if let Some(tokens) = body.default_max_tokens {
+        settings.default_max_tokens = tokens;
+    }
+    if let Some(theme) = body.theme {
+        settings.theme = theme;
+    }
+    if let Some(lang) = body.language {
+        settings.language = lang;
+    }
+    ApiResponse::ok(settings.clone())
+}
+
+// ── Memory Search (stub) ──────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct MemorySearchParams {
+    #[allow(dead_code)]
+    q: Option<String>,
+}
+
+#[derive(Serialize)]
+struct MemorySearchResult {
+    id: String,
+    content: String,
+    agent_id: String,
+    session_id: String,
+    similarity: f64,
+    created_at: String,
+}
+
+async fn search_memory(
+    _query: Query<MemorySearchParams>,
+) -> Json<ApiResponse<Vec<MemorySearchResult>>> {
+    // Stub: return empty results
+    let results: Vec<MemorySearchResult> = Vec::new();
+    ApiResponse::ok(results)
+}
+
+// ── Security Policies (stub) ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SecurityPolicy {
+    id: String,
+    name: String,
+    description: String,
+    action: String,
+    rules: Vec<SecurityRule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SecurityRule {
+    id: String,
+    name: String,
+    action: String,
+    pattern: String,
+}
+
+static POLICIES: std::sync::LazyLock<std::sync::Mutex<Vec<SecurityPolicy>>> =
+    std::sync::LazyLock::new(|| {
+        std::sync::Mutex::new(vec![
+            SecurityPolicy {
+                id: "pol_shell".into(),
+                name: "Shell Access".into(),
+                description: "Controls shell command execution by agents".into(),
+                action: "ask".into(),
+                rules: vec![
+                    SecurityRule {
+                        id: "rule_shell_rm".into(),
+                        name: "Restrict rm -rf".into(),
+                        action: "deny".into(),
+                        pattern: "rm\\s+-rf".into(),
+                    },
+                    SecurityRule {
+                        id: "rule_shell_curl".into(),
+                        name: "Network requests".into(),
+                        action: "ask".into(),
+                        pattern: "(curl|wget|nc)".into(),
+                    },
+                ],
+            },
+            SecurityPolicy {
+                id: "pol_filesystem".into(),
+                name: "Filesystem Access".into(),
+                description: "Controls file system read/write access".into(),
+                action: "allow".into(),
+                rules: vec![SecurityRule {
+                    id: "rule_fs_read".into(),
+                    name: "Read access".into(),
+                    action: "allow".into(),
+                    pattern: "/workspace/**".into(),
+                }],
+            },
+        ])
+    });
+
+async fn list_security_policies() -> Json<ApiResponse<Vec<SecurityPolicy>>> {
+    let policies = POLICIES.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    ApiResponse::ok(policies)
+}
+
+// ── Observability / Traces (stub) ─────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TraceSpan {
+    id: String,
+    trace_id: String,
+    name: String,
+    start_time: String,
+    end_time: String,
+    duration_ms: u64,
+    status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TraceResponse {
+    id: String,
+    agent_id: String,
+    session_id: String,
+    spans: Vec<TraceSpan>,
+    total_duration_ms: u64,
+    total_tokens: u64,
+    created_at: String,
+}
+
+static TRACES: std::sync::LazyLock<std::sync::Mutex<Vec<TraceResponse>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(Vec::new()));
+
+async fn list_traces() -> Json<ApiResponse<Vec<TraceResponse>>> {
+    let traces = TRACES.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    ApiResponse::ok(traces)
+}
+
+// ── Logs (stub) ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LogEntry {
+    timestamp: String,
+    level: String,
+    message: String,
+    target: String,
+}
+
+static LOGS: std::sync::LazyLock<std::sync::Mutex<Vec<LogEntry>>> =
+    std::sync::LazyLock::new(|| {
+        std::sync::Mutex::new(vec![
+            LogEntry {
+                timestamp: praxis_core::registry::timestamp(),
+                level: "info".into(),
+                message: "Praxis API server started".into(),
+                target: "praxis_api_server".into(),
+            },
+            LogEntry {
+                timestamp: praxis_core::registry::timestamp(),
+                level: "info".into(),
+                message: "Loading registry...".into(),
+                target: "praxis_api_server".into(),
+            },
+        ])
+    });
+
+async fn list_logs() -> Json<ApiResponse<Vec<LogEntry>>> {
+    let logs = LOGS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    ApiResponse::ok(logs)
+}

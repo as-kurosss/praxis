@@ -24,9 +24,13 @@ const SCROLL_OPTIONS: { value: string; label: string }[] = [
   { value: JSON.stringify({ type: 'no_op' }), label: 'Keep All' },
 ]
 
+// Track enabled state (client-side only for now)
+const enabledAgents = new Set<string>()
+
 export function AgentsPanel({ agents, providers, selectedAgent, onSelect, onRefresh, addToast }: Props) {
   const [showForm, setShowForm] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
+  const [agentEnabled, setAgentEnabled] = useState<Record<string, boolean>>({})
 
   // Form fields
   const [name, setName] = useState('')
@@ -35,6 +39,7 @@ export function AgentsPanel({ agents, providers, selectedAgent, onSelect, onRefr
   const [systemPrompt, setSystemPrompt] = useState('')
   const [temperature, setTemperature] = useState('')
   const [maxTokens, setMaxTokens] = useState('')
+  const [modelOverride, setModelOverride] = useState('')
   const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set())
   const [scrollStr, setScrollStr] = useState(SCROLL_OPTIONS[0].value)
 
@@ -46,6 +51,7 @@ export function AgentsPanel({ agents, providers, selectedAgent, onSelect, onRefr
     setSystemPrompt('You are a helpful assistant.')
     setTemperature('')
     setMaxTokens('')
+    setModelOverride('')
     setSelectedTools(new Set(['calculator', 'time']))
     setScrollStr(SCROLL_OPTIONS[0].value)
     setShowForm(true)
@@ -61,6 +67,7 @@ export function AgentsPanel({ agents, providers, selectedAgent, onSelect, onRefr
       setSystemPrompt(a.system_prompt)
       setTemperature(a.temperature != null ? String(a.temperature) : '')
       setMaxTokens(a.max_tokens != null ? String(a.max_tokens) : '')
+      setModelOverride('')
       setSelectedTools(new Set(
         a.tools.filter((t): t is ToolBinding & { type: 'builtin' } => t.type === 'builtin').map(t => t.name)
       ))
@@ -69,6 +76,16 @@ export function AgentsPanel({ agents, providers, selectedAgent, onSelect, onRefr
     } catch (e: any) {
       addToast(e.message)
     }
+  }
+
+  const toggleEnabled = (agentId: string) => {
+    setAgentEnabled(prev => {
+      const next = { ...prev }
+      next[agentId] = !prev[agentId]
+      if (!next[agentId]) delete next[agentId]
+      return next
+    })
+    addToast('Agent state toggled', 'success')
   }
 
   const toggleTool = (tool: string) => {
@@ -142,7 +159,14 @@ export function AgentsPanel({ agents, providers, selectedAgent, onSelect, onRefr
             onDoubleClick={() => openEdit(a.id)}
           >
             <div className="flex-between">
-              <h3>{a.name}</h3>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                  onClick={e => { e.stopPropagation(); toggleEnabled(a.id) }}>
+                  <input type="checkbox" checked={agentEnabled[a.id] !== false} readOnly
+                    style={{ cursor: 'pointer' }} />
+                </label>
+                <h3>{a.name}</h3>
+              </div>
               <div style={{ display: 'flex', gap: 4 }}>
                 <button className="btn btn-outline btn-sm"
                   onClick={e => { e.stopPropagation(); openEdit(a.id) }}
@@ -153,6 +177,9 @@ export function AgentsPanel({ agents, providers, selectedAgent, onSelect, onRefr
             </div>
             <p>{a.system_prompt}</p>
             <small>{providers.find(p => p.id === a.provider_id)?.label || a.provider_id} · {a.tool_count} tools</small>
+            {!agentEnabled[a.id] && agentEnabled[a.id] !== undefined && (
+              <span style={{ fontSize: 10, color: 'var(--red)' }}>Disabled</span>
+            )}
           </div>
         ))
       )}
@@ -206,6 +233,12 @@ export function AgentsPanel({ agents, providers, selectedAgent, onSelect, onRefr
               <input value={maxTokens} onChange={e => setMaxTokens(e.target.value)}
                 type="number" placeholder="Default" />
             </div>
+          </div>
+
+          <div className="form-group">
+            <label>Model Override <span style={{color:'var(--text2)',fontWeight:400}}>(optional)</span></label>
+            <input value={modelOverride} onChange={e => setModelOverride(e.target.value)}
+              placeholder="Leave empty to use provider default model" />
           </div>
 
           <div className="form-group">

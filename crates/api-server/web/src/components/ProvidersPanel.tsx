@@ -13,6 +13,8 @@ const PROVIDER_KINDS: { value: ProviderKind; label: string; defaultUrl: string }
   { value: 'anthropic', label: 'Anthropic', defaultUrl: 'https://api.anthropic.com/v1' },
   { value: 'gemini', label: 'Gemini', defaultUrl: 'https://generativelanguage.googleapis.com/v1beta' },
   { value: 'ollama', label: 'Ollama', defaultUrl: 'http://localhost:11434/v1' },
+  { value: 'custom', label: 'Custom (OpenAI-compatible)', defaultUrl: 'https://' },
+  { value: 'lm_studio', label: 'LM Studio', defaultUrl: 'http://localhost:1234/v1' },
 ]
 
 const DEFAULT_MODELS: Record<ProviderKind, string> = {
@@ -20,6 +22,8 @@ const DEFAULT_MODELS: Record<ProviderKind, string> = {
   anthropic: 'claude-3-5-sonnet-20241022',
   gemini: 'gemini-2.0-flash',
   ollama: 'llama3.2',
+  custom: 'gpt-4o-mini',
+  lm_studio: 'local-model',
 }
 
 export function ProvidersPanel({ providers, onRefresh, addToast }: Props) {
