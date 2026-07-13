@@ -12,6 +12,10 @@ pub enum ProviderKind {
     Gemini,
     /// Ollama local models (OpenAI-compatible endpoint).
     Ollama,
+    /// Generic OpenAI-compatible custom API.
+    Custom,
+    /// LM Studio local models (OpenAI-compatible endpoint).
+    LmStudio,
 }
 
 impl ProviderKind {
@@ -22,6 +26,8 @@ impl ProviderKind {
             Self::Anthropic => "Anthropic",
             Self::Gemini => "Gemini",
             Self::Ollama => "Ollama",
+            Self::Custom => "Custom",
+            Self::LmStudio => "LM Studio",
         }
     }
 
@@ -29,7 +35,10 @@ impl ProviderKind {
     /// OpenAI-compatible providers can customize the URL; Anthropic and Gemini
     /// use fixed defaults.
     pub fn supports_custom_url(&self) -> bool {
-        matches!(self, Self::Openai | Self::Ollama)
+        matches!(
+            self,
+            Self::Openai | Self::Ollama | Self::Custom | Self::LmStudio
+        )
     }
 }
 

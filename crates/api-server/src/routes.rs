@@ -232,6 +232,8 @@ fn truncate(s: &str, max: usize) -> String {
 fn openai_client(provider: &ProviderConfig) -> OpenAiClient {
     let default_url = if provider.kind == ProviderKind::Ollama {
         "http://localhost:11434/v1"
+    } else if provider.kind == ProviderKind::LmStudio {
+        "http://localhost:1234/v1"
     } else {
         "https://api.openai.com/v1"
     };
@@ -248,7 +250,10 @@ async fn run_agent_execution(
     state: &mut Vec<ChatMessage>,
 ) -> praxis_core::loops::LoopResult<String> {
     match provider.kind {
-        ProviderKind::Openai | ProviderKind::Ollama => {
+        ProviderKind::Openai
+        | ProviderKind::Ollama
+        | ProviderKind::Custom
+        | ProviderKind::LmStudio => {
             let agent = Agent::with_tools(openai_client(provider), config, tool_set);
             agent.execute(ctx, state).await
         }
@@ -279,7 +284,10 @@ async fn run_agent_streaming(
     tx: tokio::sync::mpsc::Sender<StreamChunk>,
 ) -> praxis_core::loops::LoopResult<String> {
     match provider.kind {
-        ProviderKind::Openai | ProviderKind::Ollama => {
+        ProviderKind::Openai
+        | ProviderKind::Ollama
+        | ProviderKind::Custom
+        | ProviderKind::LmStudio => {
             let agent = Agent::with_tools(openai_client(provider), config, tool_set);
             agent.execute_stream(ctx, state, tx).await
         }

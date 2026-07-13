@@ -1,6 +1,6 @@
 // ── Mirror of Rust praxis_core::registry types ──────────────────
 
-export type ProviderKind = 'openai' | 'anthropic' | 'gemini' | 'ollama';
+export type ProviderKind = 'openai' | 'anthropic' | 'gemini' | 'ollama' | 'custom' | 'lm_studio';
 
 export interface ProviderConfig {
   id: string;
