@@ -115,12 +115,8 @@ where
         if any_failed {
             LoopResult::failure(error_msg, iterations, elapsed)
         } else {
-        // Return the supervisor's output as the final result
-            LoopResult::success(
-                sup_result.output.unwrap_or_default(),
-                iterations,
-                elapsed,
-            )
+            // Return the supervisor's output as the final result
+            LoopResult::success(sup_result.output.unwrap_or_default(), iterations, elapsed)
         }
     }
 }

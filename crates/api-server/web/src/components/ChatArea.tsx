@@ -16,9 +16,12 @@ export function ChatArea({ agentId, sessionId, messages, onMessagesChange, onSes
   const [streaming, setStreaming] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [expandedReasoning, setExpandedReasoning] = useState<number | null>(null)
+  const [messageQueue, setMessageQueue] = useState<string[]>([])
   const chatRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
+  const processingRef = useRef(false)
+  const queueRef = useRef<string[]>([])
 
   // Cleanup EventSource on unmount
   useEffect(() => {
@@ -50,10 +53,37 @@ export function ChatArea({ agentId, sessionId, messages, onMessagesChange, onSes
     if (!streaming) inputRef.current?.focus()
   }, [streaming])
 
-  const sendMessage = useCallback(async () => {
-    const text = input.trim()
-    if (!text || streaming) return
+  // Queue a message to be sent after current stream finishes, or send immediately
+  const sendMessage = useCallback(async (textOverride?: string) => {
+    const text = (textOverride ?? input).trim()
+    if (!text) return
+
+    if (streaming || processingRef.current) {
+      // Stream in progress — queue this message
+      queueRef.current = [...queueRef.current, text]
+      setMessageQueue([...queueRef.current])
+      setInput('')
+      addToast('Message queued — will send after current response completes', 'info')
+      return
+    }
+
     setInput('')
+    await doSendMessage(text)
+  }, [input, streaming, addToast])
+
+  const processNextInQueue = useCallback(() => {
+    processingRef.current = false
+    queueRef.current = queueRef.current.slice(1)
+    setMessageQueue([...queueRef.current])
+    if (queueRef.current.length > 0) {
+      const nextText = queueRef.current[0]
+      processingRef.current = true
+      doSendMessage(nextText)
+    }
+  }, []) // eslint-disable-line
+
+  const doSendMessage = useCallback(async (text: string) => {
+    processingRef.current = true
     setIsLoading(true)
 
     // Add user message
@@ -130,15 +160,18 @@ export function ChatArea({ agentId, sessionId, messages, onMessagesChange, onSes
       setStreaming(false)
       // Update with final content
       const msgs = [...updatedMessages]
+      const finalContent = assistantContent.trim()
       msgs[assistantIndex] = {
         role: 'assistant',
-        content: assistantContent,
+        content: finalContent || null,
         reasoning_content: reasoningContent || null,
         tool_calls: toolCalls.length > 0 ? toolCalls.map(tc => ({ id: tc.id, name: tc.name, arguments: null })) : null,
       }
       onMessagesChange(msgs)
       // Only tell parent about session id on success
       if (saveSession && currentSession) onSessionChange(currentSession)
+      // Process next message in queue
+      setTimeout(() => processNextInQueue(), 100)
     }
 
     es.addEventListener('done', () => {
@@ -181,9 +214,10 @@ export function ChatArea({ agentId, sessionId, messages, onMessagesChange, onSes
     }, 30000)
 
     es.addEventListener('done', () => clearTimeout(timeoutId), { once: true })
-  }, [input, streaming, messages, agentId, sessionId, onMessagesChange, onSessionChange, addToast])
+  }, [messages, agentId, sessionId, onMessagesChange, onSessionChange, addToast])
 
   const fallbackToNonStreaming = async (text: string, sid: string, currentMessages: ChatMessage[]) => {
+    processingRef.current = false
     try {
       const result = await chatNonStreaming(agentId, text, sid || null)
       // Append — DO NOT replace the last element of currentMessages, because
@@ -198,6 +232,7 @@ export function ChatArea({ agentId, sessionId, messages, onMessagesChange, onSes
       // the streamed content (even if partial). Calling onMessagesChange(currentMessages)
       // would erase what was already streamed and shown in the UI.
     }
+    setTimeout(() => processNextInQueue(), 100)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -250,6 +285,12 @@ export function ChatArea({ agentId, sessionId, messages, onMessagesChange, onSes
                   {isStreamingAssistant && !msg.content && !msg.tool_calls?.length && (
                     <span className="cursor">▍</span>
                   )}
+                  {/* Fallback for empty assistant response after streaming completes */}
+                  {!isStreamingAssistant && i === messages.length - 1 && !msg.content && !msg.tool_calls?.length && !msg.reasoning_content && (
+                    <div className="fallback-msg">
+                      The agent returned an empty response. Try rephrasing your message or check provider settings.
+                    </div>
+                  )}
                 </div>
               )
             } else if (msg.role === 'system') {
@@ -271,16 +312,21 @@ export function ChatArea({ agentId, sessionId, messages, onMessagesChange, onSes
       </div>
 
       <div className="chat-input-area">
+        {messageQueue.length > 0 && (
+          <div className="queue-indicator">
+            {messageQueue.length} queued
+          </div>
+        )}
         <input
           ref={inputRef}
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Type a message..."
-          disabled={streaming}
+          placeholder={streaming ? 'Streaming in progress...' : 'Type a message...'}
+          disabled={false}
         />
-        <button className="btn btn-primary" onClick={sendMessage} disabled={!input.trim() || streaming}>
-          {streaming ? '...' : 'Send'}
+        <button className="btn btn-primary" onClick={() => sendMessage()} disabled={!input.trim()}>
+          {streaming ? 'Queue' : 'Send'}
         </button>
       </div>
     </>

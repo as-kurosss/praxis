@@ -212,3 +212,106 @@ body {
 .toast-error { background: var(--red); color: #fff; }
 .toast-success { background: var(--accent); color: #fff; }
 @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+/* ── Settings Modal ───────────────────────────────────────── */
+.settings-modal { max-width: 480px; }
+.settings-modal .modal h2 { margin-bottom: 12px; }
+.setting-value {
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text);
+}
+.setting-hint {
+  font-size: 11px;
+  color: var(--text2);
+  margin-top: 2px;
+}
+.settings-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 16px 0;
+}
+.view-mode-options {
+  display: flex;
+  gap: 6px;
+}
+
+/* ── View-only Banner ─────────────────────────────────────── */
+.viewonly-banner {
+  background: #8b5cf6;
+  color: #fff;
+  text-align: center;
+  padding: 6px 16px;
+  font-size: 12px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+/* ── Toast info style ─────────────────────────────────────── */
+.toast-info {
+  background: var(--accent-dim);
+  color: #fff;
+}
+
+/* ── Fallback message ─────────────────────────────────────── */
+.fallback-msg {
+  font-size: 12px;
+  color: var(--text2);
+  text-align: center;
+  font-style: italic;
+  padding: 8px;
+}
+
+/* ── Queue indicator ──────────────────────────────────────── */
+.queue-indicator {
+  position: absolute;
+  top: -22px;
+  left: 16px;
+  font-size: 11px;
+  color: var(--accent);
+  background: var(--surface);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+/* Reposition chat-input-area for queue-indicator */
+.chat-input-area {
+  position: relative;
+}
+
+/* ── Wide mode ────────────────────────────────────────────── */
+.app-wide .sidebar {
+  display: none;
+}
+
+/* ── Simple mode ──────────────────────────────────────────── */
+.app-simple .sidebar {
+  display: none;
+}
+.app-simple .header {
+  padding: 8px 12px;
+}
+.app-simple .header h1 {
+  font-size: 14px;
+}
+.app-simple .header .subtitle {
+  display: none;
+}
+.app-simple .msg {
+  max-width: 95%;
+  font-size: 13px;
+  padding: 8px 12px;
+}
+.app-simple .chat-input-area {
+  padding: 8px 12px;
+}
+.app-simple .chat-area {
+  padding: 8px;
+}
+.app-simple #active-agent-name {
+  font-size: 14px;
+}

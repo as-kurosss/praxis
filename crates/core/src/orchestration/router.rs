@@ -64,7 +64,10 @@ where
 
         if idx >= self.agents.len() {
             return LoopResult::failure(
-                format!("router index {idx} out of bounds (agents: {})", self.agents.len()),
+                format!(
+                    "router index {idx} out of bounds (agents: {})",
+                    self.agents.len()
+                ),
                 1,
                 crate::loops::elapsed_ms(&start),
             );
@@ -78,7 +81,11 @@ where
             if let Some(output) = result.output {
                 LoopResult::success(output, result.iterations, elapsed)
             } else {
-                LoopResult::failure(String::from("router: no output from agent"), result.iterations, elapsed)
+                LoopResult::failure(
+                    String::from("router: no output from agent"),
+                    result.iterations,
+                    elapsed,
+                )
             }
         } else {
             let msg = match &result.status {

@@ -315,7 +315,11 @@ mod tests {
         let p = PathRestrict::new(vec!["/tmp/workdir"]);
         let result = p.check_read("/etc/passwd".as_ref());
         assert!(result.is_err());
-        if let Err(Error::AccessDenied { resource: _, reason: _ }) = result {
+        if let Err(Error::AccessDenied {
+            resource: _,
+            reason: _,
+        }) = result
+        {
             // expected
         } else {
             panic!("expected AccessDenied");

@@ -4,7 +4,15 @@
 
 use praxis_core::registry::{AgentRegistry, SessionStore};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+/// A notification from background tasks.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Notification {
+    pub kind: String,
+    pub message: String,
+    pub timestamp: String,
+}
 
 /// Shared application state.
 #[derive(Clone)]
@@ -17,6 +25,12 @@ pub struct AppState {
     pub data_dir: PathBuf,
     /// Web dist directory for static files.
     pub dist_dir: PathBuf,
+    /// Request timeout in seconds for LLM calls.
+    pub request_timeout_seconds: u64,
+    /// Owner identifier (empty = single-user mode).
+    pub owner_id: String,
+    /// Pending notifications for the frontend.
+    pub notifications: Arc<Mutex<Vec<Notification>>>,
 }
 
 impl AppState {
@@ -34,13 +48,43 @@ impl AppState {
 
         let sessions = SessionStore::open(&data_dir)?;
 
-        let dist_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web").join("dist");
+        let dist_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("web")
+            .join("dist");
+
+        let request_timeout_seconds = std::env::var("PRAXIS_TIMEOUT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30);
+
+        let owner_id = std::env::var("PRAXIS_OWNER").unwrap_or_default();
 
         Ok(Self {
             registry: Arc::new(registry),
             sessions: Arc::new(sessions),
             data_dir,
             dist_dir,
+            request_timeout_seconds,
+            owner_id,
+            notifications: Arc::new(Mutex::new(Vec::new())),
         })
+    }
+
+    /// Push a notification for the frontend.
+    pub fn notify(&self, kind: impl Into<String>, message: impl Into<String>) {
+        if let Ok(mut notes) = self.notifications.lock() {
+            notes.push(Notification {
+                kind: kind.into(),
+                message: message.into(),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+            });
+        }
+    }
+
+    /// Drain all pending notifications.
+    pub fn drain_notifications(&self) -> Vec<Notification> {
+        self.notifications
+            .lock()
+            .map_or_else(|_| Vec::new(), |mut notes| std::mem::take(&mut *notes))
     }
 }

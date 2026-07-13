@@ -82,9 +82,7 @@ impl<L: Loop + Send + 'static> TaskFactory<L> {
     where
         F: Fn(Schedule) -> ScheduledTask<L> + Send + Sync + 'static,
     {
-        Self {
-            inner: Arc::new(f),
-        }
+        Self { inner: Arc::new(f) }
     }
 }
 
@@ -141,13 +139,15 @@ impl PersistentScheduler {
         let factory = factory.inner;
         self.factories.push((
             type_name,
-            Arc::new(move |def: StoredTaskDef| -> Result<Box<dyn AnyTask>, PersistError> {
-                let schedule = StoredSchedule::to_schedule(&def.schedule);
-                let mut task = (factory)(schedule);
-                task.id = TaskId(def.id);
-                task.max_consecutive_failures = def.max_consecutive_failures;
-                Ok(Box::new(task))
-            }),
+            Arc::new(
+                move |def: StoredTaskDef| -> Result<Box<dyn AnyTask>, PersistError> {
+                    let schedule = StoredSchedule::to_schedule(&def.schedule);
+                    let mut task = (factory)(schedule);
+                    task.id = TaskId(def.id);
+                    task.max_consecutive_failures = def.max_consecutive_failures;
+                    Ok(Box::new(task))
+                },
+            ),
         ));
     }
 
@@ -221,9 +221,7 @@ impl PersistentScheduler {
 impl StoredSchedule {
     fn to_schedule(s: &StoredSchedule) -> Schedule {
         match s {
-            StoredSchedule::IntervalMs(ms) => {
-                Schedule::Interval(Duration::from_millis(*ms))
-            }
+            StoredSchedule::IntervalMs(ms) => Schedule::Interval(Duration::from_millis(*ms)),
             StoredSchedule::Cron(e) => Schedule::Cron(e.clone()),
             StoredSchedule::OnceUnixSecs(t) => {
                 Schedule::Once(SystemTime::UNIX_EPOCH + Duration::from_secs(*t))
@@ -242,11 +240,11 @@ impl StoredSchedule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use crate::loops::{Context, LoopId, LoopResult, StopCondition};
     use std::sync::Arc as StdArc;
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Duration;
     use tempfile::TempDir;
-    use crate::loops::{Context, LoopId, LoopResult, StopCondition};
 
     struct TestLoop;
 

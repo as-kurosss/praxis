@@ -1,6 +1,6 @@
 import type {
   ApiResponse, ProviderConfig, AgentDefinition, AgentSummary,
-  ChatResponse, SessionSummary, Session,
+  ChatResponse, SessionSummary, Session, Config, Notification,
 } from './types';
 
 class ApiError extends Error {
@@ -80,4 +80,16 @@ export async function getSession(id: string): Promise<Session> {
 
 export async function deleteSession(id: string): Promise<boolean> {
   return request(`/api/sessions/${id}`, { method: 'DELETE' });
+}
+
+// ── Config ──
+
+export async function getConfig(): Promise<Config> {
+  return request('/api/config');
+}
+
+// ── Notifications ──
+
+export async function getNotifications(): Promise<Notification[]> {
+  return request('/api/notifications');
 }
