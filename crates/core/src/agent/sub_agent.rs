@@ -170,6 +170,7 @@ impl<L: LlmClient + 'static> Tool for SpawnAgentTool<L> {
         let client = (self.client_factory)(&config.model);
         let agent_config = AgentConfig {
             model: config.model.clone(),
+            model_id: None,
             system_prompt,
             temperature: None,
             max_tokens: None,

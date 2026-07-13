@@ -76,6 +76,19 @@ pub struct AgentDefinition {
     pub provider_id: String,
     /// System prompt for the agent.
     pub system_prompt: String,
+    /// Per-agent model ID override (e.g. "gpt-4o-mini").
+    /// When set, overrides the provider-level model.
+    pub model_id: Option<String>,
+    /// Whether this agent is enabled (default: `true`).
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    /// Agent language (e.g. "en", "ru", "zh") for language-synced responses.
+    pub language: Option<String>,
+    /// Number of auto-continue retries on text-only responses (default: `0`).
+    /// When an agent returns only text (no tool calls), it can retry up to
+    /// this many times to produce a more complete response.
+    #[serde(default)]
+    pub auto_continue_retry: u32,
     /// Sampling temperature. `None` = provider default.
     pub temperature: Option<f32>,
     /// Maximum tokens. `None` = provider default.
@@ -107,6 +120,10 @@ impl AgentDefinition {
             description: None,
             provider_id: provider_id.into(),
             system_prompt: system_prompt.into(),
+            model_id: None,
+            enabled: true,
+            language: None,
+            auto_continue_retry: 0,
             temperature: None,
             max_tokens: None,
             scroll_strategy: ScrollConfig::default(),

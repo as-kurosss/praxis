@@ -161,6 +161,7 @@ mod tests {
 
         let config = AgentConfig {
             model: "gpt-4o".into(),
+            model_id: None,
             system_prompt: "You are a test agent.".into(),
             temperature: Some(0.7),
             max_tokens: Some(4096),
@@ -181,6 +182,7 @@ mod tests {
         // Ensure scroll_strategy is excluded from JSON
         let config = AgentConfig {
             model: "claude-3-5-sonnet".into(),
+            model_id: None,
             system_prompt: "Help.".into(),
             temperature: None,
             max_tokens: None,

@@ -18,6 +18,7 @@
 //! | `GET` | `/api/agents/{id}/chat/stream` | SSE stream chat |
 //! | `GET` | `/api/agents/{id}/sessions` | List sessions for an agent |
 //! | `DELETE` | `/api/sessions/{id}` | Delete a session |
+//! | `GET` | `/api/stats` | Get agent system statistics |
 
 use crate::state::AppState;
 use axum::{
@@ -89,10 +90,20 @@ struct CreateAgentRequest {
     description: Option<String>,
     provider_id: String,
     system_prompt: String,
+    model_id: Option<String>,
+    #[serde(default = "default_enabled")]
+    enabled: bool,
+    language: Option<String>,
+    #[serde(default)]
+    auto_continue_retry: u32,
     temperature: Option<f32>,
     max_tokens: Option<u32>,
     scroll_strategy: Option<ScrollConfig>,
     tools: Option<Vec<ToolBinding>>,
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 #[derive(Deserialize)]
@@ -140,6 +151,15 @@ struct SessionSummaryResponse {
     preview: Vec<String>,
 }
 
+#[derive(Serialize)]
+struct StatsResponse {
+    total_agents: usize,
+    enabled_agents: usize,
+    total_providers: usize,
+    total_sessions: usize,
+    total_messages: usize,
+}
+
 // ── Build the router ──────────────────────────────────────────────────
 
 pub fn router(state: AppState) -> Router {
@@ -169,6 +189,8 @@ pub fn router(state: AppState) -> Router {
             "/api/sessions/{id}",
             get(get_session_detail).delete(delete_session),
         )
+        // Stats
+        .route("/api/stats", get(stats_handler))
         .with_state(state)
         // Static files (SPA)
         .fallback_service(serve_dir)
@@ -232,8 +254,6 @@ fn truncate(s: &str, max: usize) -> String {
 fn openai_client(provider: &ProviderConfig) -> OpenAiClient {
     let default_url = if provider.kind == ProviderKind::Ollama {
         "http://localhost:11434/v1"
-    } else if provider.kind == ProviderKind::LmStudio {
-        "http://localhost:1234/v1"
     } else {
         "https://api.openai.com/v1"
     };
@@ -250,10 +270,7 @@ async fn run_agent_execution(
     state: &mut Vec<ChatMessage>,
 ) -> praxis_core::loops::LoopResult<String> {
     match provider.kind {
-        ProviderKind::Openai
-        | ProviderKind::Ollama
-        | ProviderKind::Custom
-        | ProviderKind::LmStudio => {
+        ProviderKind::Openai | ProviderKind::Ollama => {
             let agent = Agent::with_tools(openai_client(provider), config, tool_set);
             agent.execute(ctx, state).await
         }
@@ -284,10 +301,7 @@ async fn run_agent_streaming(
     tx: tokio::sync::mpsc::Sender<StreamChunk>,
 ) -> praxis_core::loops::LoopResult<String> {
     match provider.kind {
-        ProviderKind::Openai
-        | ProviderKind::Ollama
-        | ProviderKind::Custom
-        | ProviderKind::LmStudio => {
+        ProviderKind::Openai | ProviderKind::Ollama => {
             let agent = Agent::with_tools(openai_client(provider), config, tool_set);
             agent.execute_stream(ctx, state, tx).await
         }
@@ -409,6 +423,10 @@ async fn create_agent(
         description: body.description,
         provider_id: body.provider_id,
         system_prompt: body.system_prompt,
+        model_id: body.model_id,
+        enabled: body.enabled,
+        language: body.language,
+        auto_continue_retry: body.auto_continue_retry,
         temperature: body.temperature,
         max_tokens: body.max_tokens,
         scroll_strategy: body.scroll_strategy.unwrap_or_default(),
@@ -442,6 +460,10 @@ async fn update_agent(
         description: body.description,
         provider_id: body.provider_id,
         system_prompt: body.system_prompt,
+        model_id: body.model_id,
+        enabled: body.enabled,
+        language: body.language,
+        auto_continue_retry: body.auto_continue_retry,
         temperature: body.temperature,
         max_tokens: body.max_tokens,
         scroll_strategy: body.scroll_strategy.unwrap_or_default(),
@@ -491,7 +513,11 @@ async fn chat_handler(
 
     // 4. Build agent config
     let config = AgentConfig {
-        model: provider.model.clone(),
+        model: def
+            .model_id
+            .clone()
+            .unwrap_or_else(|| provider.model.clone()),
+        model_id: def.model_id.clone(),
         system_prompt: def.system_prompt.clone(),
         temperature: body.temperature.or(def.temperature),
         max_tokens: body.max_tokens.or(def.max_tokens),
@@ -564,7 +590,11 @@ async fn chat_stream_handler(
     let tool_set = build_tool_set(&def.tools);
 
     let config = AgentConfig {
-        model: provider.model.clone(),
+        model: def
+            .model_id
+            .clone()
+            .unwrap_or_else(|| provider.model.clone()),
+        model_id: def.model_id.clone(),
         system_prompt: def.system_prompt.clone(),
         temperature: params.temperature.or(def.temperature),
         max_tokens: params.max_tokens.or(def.max_tokens),
@@ -728,4 +758,25 @@ async fn delete_session(
         .delete_session(&id)
         .map_err(|e| ApiResponse::err(format!("Failed to delete session: {e}")))?;
     Ok(ApiResponse::ok(true))
+}
+
+/// GET /api/stats — return system-wide agent statistics.
+async fn stats_handler(State(state): State<AppState>) -> Json<ApiResponse<StatsResponse>> {
+    let agents = state.registry.list_agents();
+    let providers = state.registry.list_providers();
+    let all_sessions = state.sessions.list_all_sessions();
+
+    let total_agents = agents.len();
+    let enabled_agents = agents.iter().filter(|a| a.enabled).count();
+    let total_providers = providers.len();
+    let total_sessions = all_sessions.len();
+    let total_messages: usize = all_sessions.iter().map(|s| s.message_count).sum();
+
+    ApiResponse::ok(StatsResponse {
+        total_agents,
+        enabled_agents,
+        total_providers,
+        total_sessions,
+        total_messages,
+    })
 }

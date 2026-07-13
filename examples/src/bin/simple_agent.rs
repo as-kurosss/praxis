@@ -21,6 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Configure the agent
     let config = AgentConfig {
         model: "gpt-4o".into(),
+        model_id: None,
         system_prompt: "You are a concise assistant.".into(),
         temperature: Some(0.5),
         max_tokens: Some(1024),
