@@ -1,0 +1,15 @@
+target/
+worktrees/
+.git/
+.gitignore
+.gitattributes
+*.md
+.DS_Store
+*.swp
+*.swo
+.agents
+AGENTS.md
+DEV_GUIDE.md
+instr.md
+ROADMAP.md
+praxis-data/

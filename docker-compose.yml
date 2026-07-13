@@ -1,0 +1,20 @@
+services:
+  praxis-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: praxis-api-server:latest
+    container_name: praxis-api
+    ports:
+      - "3000:3000"
+    environment:
+      - PRAXIS_DATA=/data
+      - PRAXIS_HOST=0.0.0.0
+      - PRAXIS_PORT=3000
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    volumes:
+      - praxis-data:/data
+    restart: unless-stopped
+
+volumes:
+  praxis-data:
