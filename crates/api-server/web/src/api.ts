@@ -1,7 +1,6 @@
 import type {
   ApiResponse, ProviderConfig, AgentDefinition, AgentSummary,
-  ChatResponse, SessionSummary, Session,
-  TraceSummary, TraceDetail, SpanSummary, MetricPoint, DashboardStats,
+  ChatResponse, SessionSummary, Session, Config, Notification,
 } from './types';
 
 class ApiError extends Error {
@@ -83,24 +82,14 @@ export async function deleteSession(id: string): Promise<boolean> {
   return request(`/api/sessions/${id}`, { method: 'DELETE' });
 }
 
-// ── Observe ──
+// ── Config ──
 
-export async function listTraces(): Promise<TraceSummary[]> {
-  return request('/api/observe/traces');
+export async function getConfig(): Promise<Config> {
+  return request('/api/config');
 }
 
-export async function getTraceDetail(id: string): Promise<TraceDetail> {
-  return request(`/api/observe/traces/${id}`);
-}
+// ── Notifications ──
 
-export async function getTraceSpans(id: string): Promise<SpanSummary[]> {
-  return request(`/api/observe/traces/${id}/spans`);
-}
-
-export async function listMetrics(): Promise<MetricPoint[]> {
-  return request('/api/observe/metrics');
-}
-
-export async function getDashboardStats(): Promise<DashboardStats> {
-  return request('/api/observe/stats');
+export async function getNotifications(): Promise<Notification[]> {
+  return request('/api/notifications');
 }

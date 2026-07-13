@@ -98,6 +98,17 @@ export interface StreamChunk {
   data: string;
 }
 
+export interface Config {
+  request_timeout_seconds: number
+  owner_id: string
+}
+
+export interface Notification {
+  kind: string
+  message: string
+  timestamp: string
+}
+
 export const BUILTIN_TOOLS = [
   { name: 'calculator', description: 'Performs arithmetic calculations' },
   { name: 'time', description: 'Gets the current time' },

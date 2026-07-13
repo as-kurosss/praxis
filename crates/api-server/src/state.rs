@@ -1,13 +1,18 @@
 //! **AppState** — shared application state for the Praxis API server.
 //!
-//! Manages the persistent agent registry, session store, and observability
-//! collector.
+//! Manages the persistent agent registry and session store.
 
 use praxis_core::registry::{AgentRegistry, SessionStore};
-use praxis_observe::collector::TraceCollector;
-use praxis_observe::exporter::SqliteExporter;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+/// A notification from background tasks.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Notification {
+    pub kind: String,
+    pub message: String,
+    pub timestamp: String,
+}
 
 /// Shared application state.
 #[derive(Clone)]
@@ -16,12 +21,16 @@ pub struct AppState {
     pub registry: Arc<AgentRegistry>,
     /// Persistent session store.
     pub sessions: Arc<SessionStore>,
-    /// Observability trace collector.
-    pub observer: Arc<TraceCollector>,
     /// Data directory path.
     pub data_dir: PathBuf,
     /// Web dist directory for static files.
     pub dist_dir: PathBuf,
+    /// Request timeout in seconds for LLM calls.
+    pub request_timeout_seconds: u64,
+    /// Owner identifier (empty = single-user mode).
+    pub owner_id: String,
+    /// Pending notifications for the frontend.
+    pub notifications: Arc<Mutex<Vec<Notification>>>,
 }
 
 impl AppState {
@@ -43,18 +52,39 @@ impl AppState {
             .join("web")
             .join("dist");
 
-        // Initialise observe with SQLite backend
-        let db_path = data_dir.join("observe.db");
-        let exporter = SqliteExporter::open(db_path)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-        let observer = Arc::new(TraceCollector::new(Arc::new(exporter)));
+        let request_timeout_seconds = std::env::var("PRAXIS_TIMEOUT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30);
+
+        let owner_id = std::env::var("PRAXIS_OWNER").unwrap_or_default();
 
         Ok(Self {
             registry: Arc::new(registry),
             sessions: Arc::new(sessions),
-            observer,
             data_dir,
             dist_dir,
+            request_timeout_seconds,
+            owner_id,
+            notifications: Arc::new(Mutex::new(Vec::new())),
         })
+    }
+
+    /// Push a notification for the frontend.
+    pub fn notify(&self, kind: impl Into<String>, message: impl Into<String>) {
+        if let Ok(mut notes) = self.notifications.lock() {
+            notes.push(Notification {
+                kind: kind.into(),
+                message: message.into(),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+            });
+        }
+    }
+
+    /// Drain all pending notifications.
+    pub fn drain_notifications(&self) -> Vec<Notification> {
+        self.notifications
+            .lock()
+            .map_or_else(|_| Vec::new(), |mut notes| std::mem::take(&mut *notes))
     }
 }
