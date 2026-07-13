@@ -5,13 +5,13 @@
 //! feed results back → repeat until the LLM produces a final text response.
 
 use super::llm::{ChatMessage, ChatRequest, LlmClient, StreamChunk, ToolCall};
-use serde::{Deserialize, Serialize};
 use super::tool::ToolSet;
 use crate::loops::{Context, Loop, LoopResult};
 use crate::memory::EpisodicMemory;
+use serde::{Deserialize, Serialize};
+use std::sync::Mutex;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-use std::sync::Mutex;
 use std::time::Instant;
 
 /// Configuration for an [`Agent`].
@@ -163,10 +163,7 @@ impl<L: LlmClient> Agent<L> {
         // should push the user message).
         let is_dup = state
             .last()
-            .map(|m| {
-                m.role.as_str() == "user"
-                    && m.content.as_deref() == Some(&ctx.input)
-            })
+            .map(|m| m.role.as_str() == "user" && m.content.as_deref() == Some(&ctx.input))
             .unwrap_or(false);
         if !is_dup {
             state.push(ChatMessage::user(ctx.input));
@@ -215,13 +212,21 @@ impl<L: LlmClient> Agent<L> {
             // they can appear from partial saves and cause 400 errors on some providers.
             let mut messages = Vec::with_capacity(state.len() + 1);
             messages.push(ChatMessage::system(&self.config.system_prompt));
-            messages.extend(state.iter().filter(|m| {
-                if m.role.as_str() == "assistant" && m.content.is_none() && m.reasoning_content.is_none() {
-                    m.tool_calls.as_ref().is_some_and(|c| !c.is_empty())
-                } else {
-                    true
-                }
-            }).cloned());
+            messages.extend(
+                state
+                    .iter()
+                    .filter(|m| {
+                        if m.role.as_str() == "assistant"
+                            && m.content.is_none()
+                            && m.reasoning_content.is_none()
+                        {
+                            m.tool_calls.as_ref().is_some_and(|c| !c.is_empty())
+                        } else {
+                            true
+                        }
+                    })
+                    .cloned(),
+            );
 
             let request = ChatRequest {
                 messages,
@@ -232,7 +237,8 @@ impl<L: LlmClient> Agent<L> {
 
             // Call LLM — streaming (when chunk_sender is present) or non-streaming
             let reasoning_text;
-            let (response_text, has_content, has_tool_calls, tool_calls) = if chunk_sender.is_some() {
+            let (response_text, has_content, has_tool_calls, tool_calls) = if chunk_sender.is_some()
+            {
                 // ── Streaming path ──
                 // If chat_stream is unsupported (e.g. mock clients), fall back
                 // to non-streaming chat + emit the full text as a single chunk.
@@ -243,7 +249,10 @@ impl<L: LlmClient> Agent<L> {
                         let response = match self.client.chat(request).await {
                             Ok(r) => r,
                             Err(e) => {
-                                send_chunk(&chunk_sender, StreamChunk::Error(format!("LLM error: {e}")));
+                                send_chunk(
+                                    &chunk_sender,
+                                    StreamChunk::Error(format!("LLM error: {e}")),
+                                );
                                 return LoopResult::failure(
                                     format!("LLM error: {e}"),
                                     iteration,
@@ -266,24 +275,43 @@ impl<L: LlmClient> Agent<L> {
                             let _has_content = !fallback_text.is_empty();
                             state.push(ChatMessage::with_tool_calls(fallback_tc.clone()));
                             for tc in &fallback_tc {
-                                send_chunk(&chunk_sender, StreamChunk::ToolCallStart { id: tc.id.clone(), name: tc.name.clone() });
+                                send_chunk(
+                                    &chunk_sender,
+                                    StreamChunk::ToolCallStart {
+                                        id: tc.id.clone(),
+                                        name: tc.name.clone(),
+                                    },
+                                );
                             }
                             for tc in &fallback_tc {
-                                let result = self.tools.execute(&tc.name, tc.arguments.clone()).await;
+                                let result =
+                                    self.tools.execute(&tc.name, tc.arguments.clone()).await;
                                 match result {
-                                    Ok(value) => state.push(ChatMessage::tool_result(&tc.id, &value)),
-                                    Err(e) => state.push(ChatMessage::tool_result(&tc.id, &serde_json::json!({"error": e.to_string()}))),
+                                    Ok(value) => {
+                                        state.push(ChatMessage::tool_result(&tc.id, &value))
+                                    }
+                                    Err(e) => state.push(ChatMessage::tool_result(
+                                        &tc.id,
+                                        &serde_json::json!({"error": e.to_string()}),
+                                    )),
                                 }
                             }
                             for tc in &fallback_tc {
-                                send_chunk(&chunk_sender, StreamChunk::ToolCallEnd { id: tc.id.clone() });
+                                send_chunk(
+                                    &chunk_sender,
+                                    StreamChunk::ToolCallEnd { id: tc.id.clone() },
+                                );
                             }
                             if let Some(ref strategy) = self.config.scroll_strategy {
                                 strategy.apply(state);
                             }
                             continue;
                         } else {
-                            return LoopResult::success(fallback_text, iteration, crate::loops::elapsed_ms(&start));
+                            return LoopResult::success(
+                                fallback_text,
+                                iteration,
+                                crate::loops::elapsed_ms(&start),
+                            );
                         }
                     }
                 };
@@ -319,7 +347,11 @@ impl<L: LlmClient> Agent<L> {
                         }
                         StreamChunk::Error(msg) => {
                             send_chunk(&chunk_sender, StreamChunk::Error(msg.clone()));
-                            return LoopResult::failure(msg, iteration, crate::loops::elapsed_ms(&start));
+                            return LoopResult::failure(
+                                msg,
+                                iteration,
+                                crate::loops::elapsed_ms(&start),
+                            );
                         }
                         _ => {}
                     }
@@ -351,14 +383,24 @@ impl<L: LlmClient> Agent<L> {
                 let assistant_msg = response.message;
                 reasoning_text = assistant_msg.reasoning_content.clone().unwrap_or_default();
                 // Treat reasoning_content as valid content so the guard below passes
-                let has_content_non = assistant_msg.content.as_ref().is_some_and(|c| !c.is_empty())
-                    || assistant_msg.reasoning_content.as_ref().is_some_and(|c| !c.is_empty());
+                let has_content_non = assistant_msg
+                    .content
+                    .as_ref()
+                    .is_some_and(|c| !c.is_empty())
+                    || assistant_msg
+                        .reasoning_content
+                        .as_ref()
+                        .is_some_and(|c| !c.is_empty());
                 let has_tc = assistant_msg
                     .tool_calls
                     .as_ref()
                     .is_some_and(|calls| !calls.is_empty());
 
-                let text = if assistant_msg.content.as_ref().is_some_and(|c| !c.is_empty()) {
+                let text = if assistant_msg
+                    .content
+                    .as_ref()
+                    .is_some_and(|c| !c.is_empty())
+                {
                     assistant_msg.content.clone().unwrap()
                 } else {
                     // Fall back to reasoning_content when content is null
@@ -380,11 +422,7 @@ impl<L: LlmClient> Agent<L> {
             if !has_content && !has_tool_calls && !has_reasoning {
                 let msg = "LLM returned empty response (no content, no tool calls)";
                 send_chunk(&chunk_sender, StreamChunk::Error(msg.into()));
-                return LoopResult::failure(
-                    msg,
-                    iteration,
-                    crate::loops::elapsed_ms(&start),
-                );
+                return LoopResult::failure(msg, iteration, crate::loops::elapsed_ms(&start));
             }
 
             // Push to state
@@ -401,7 +439,13 @@ impl<L: LlmClient> Agent<L> {
             if has_tool_calls {
                 // Emit ToolCallStart for each tool
                 for tc in &tool_calls {
-                    send_chunk(&chunk_sender, StreamChunk::ToolCallStart { id: tc.id.clone(), name: tc.name.clone() });
+                    send_chunk(
+                        &chunk_sender,
+                        StreamChunk::ToolCallStart {
+                            id: tc.id.clone(),
+                            name: tc.name.clone(),
+                        },
+                    );
                 }
                 // Execute each tool and append results
                 for tc in &tool_calls {
@@ -433,7 +477,11 @@ impl<L: LlmClient> Agent<L> {
                 // Continue — LLM will see tool results next iteration
             } else {
                 // Token already emitted during streaming; non-streaming also emitted above
-                return LoopResult::success(response_text, iteration, crate::loops::elapsed_ms(&start));
+                return LoopResult::success(
+                    response_text,
+                    iteration,
+                    crate::loops::elapsed_ms(&start),
+                );
             }
         }
 

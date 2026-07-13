@@ -164,15 +164,9 @@ where
 #[derive(Debug, Clone)]
 pub enum SchedulerEvent {
     /// A task was executed successfully.
-    TaskCompleted {
-        task_id: TaskId,
-        duration_ms: u64,
-    },
+    TaskCompleted { task_id: TaskId, duration_ms: u64 },
     /// A task failed (but will be retried).
-    TaskFailed {
-        task_id: TaskId,
-        error: String,
-    },
+    TaskFailed { task_id: TaskId, error: String },
     /// A task was disabled due to too many consecutive failures.
     TaskDisabled {
         task_id: TaskId,
@@ -261,9 +255,9 @@ impl Default for Scheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::loops::{Context, CycleType, LoopResult, LoopId, StopCondition};
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use crate::loops::{Context, CycleType, LoopId, LoopResult, StopCondition};
     use std::sync::Arc as StdArc;
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Duration;
 
     /// A mock loop that increments a counter each time it runs.
@@ -302,7 +296,9 @@ mod tests {
         let task = ScheduledTask::new(
             TaskId::new(),
             Schedule::Interval(Duration::from_millis(10)),
-            CounterLoop { counter: StdArc::clone(&counter) },
+            CounterLoop {
+                counter: StdArc::clone(&counter),
+            },
             StdArc::new(|| dummy_context()),
         );
 
@@ -327,7 +323,9 @@ mod tests {
         let task = ScheduledTask::new(
             TaskId::new(),
             Schedule::Interval(Duration::from_secs(1)),
-            CounterLoop { counter: StdArc::clone(&counter) },
+            CounterLoop {
+                counter: StdArc::clone(&counter),
+            },
             StdArc::new(|| dummy_context()),
         );
 

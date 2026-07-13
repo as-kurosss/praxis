@@ -4,10 +4,11 @@ import { ProvidersPanel } from './components/ProvidersPanel'
 import { AgentsPanel } from './components/AgentsPanel'
 import { ChatArea } from './components/ChatArea'
 import { SessionsPanel } from './components/SessionsPanel'
+import { ObservePage } from './components/observe/ObservePage'
 import * as api from './api'
 import type { AgentSummary, ProviderConfig, SessionSummary, ChatMessage } from './types'
 
-type Tab = 'agents' | 'providers'
+type Tab = 'agents' | 'providers' | 'observe'
 
 interface Toast { id: number; msg: string; type: 'error' | 'success' }
 
@@ -71,6 +72,8 @@ export default function App() {
                onClick={() => setTab('agents')}>Agents</div>
           <div className={`nav-tab${tab === 'providers' ? ' active' : ''}`}
                onClick={() => setTab('providers')}>Providers</div>
+          <div className={`nav-tab${tab === 'observe' ? ' active' : ''}`}
+               onClick={() => setTab('observe')}>Observe</div>
         </div>
         <div className={`tab-content${tab === 'agents' ? ' active' : ''}`}>
           <AgentsPanel
@@ -92,7 +95,7 @@ export default function App() {
       </div>
 
       {/* Main area */}
-      <div className="main">
+      <div className="main" style={tab === 'observe' ? { overflow: 'auto' } : undefined}>
         <div className="header flex-between">
           <div>
             <span id="active-agent-name">
@@ -136,6 +139,8 @@ export default function App() {
             }}
             addToast={addToast}
           />
+        ) : tab === 'observe' ? (
+          <ObservePage addToast={addToast} />
         ) : (
           <div className="empty-state" style={{flex:1,display:'flex',flexDirection:'column',justifyContent:'center'}}>
             <h3>Praxis Console</h3>

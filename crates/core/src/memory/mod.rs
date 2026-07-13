@@ -13,12 +13,12 @@
 //! EpisodicMemory. DistilledMemory periodically creates summaries of segments
 //! so that long-past context can be injected as concise background.
 
-mod working;
-mod episodic;
 mod distilled;
+mod episodic;
 pub mod scroll;
+mod working;
 
-pub use working::*;
-pub use episodic::*;
 pub use distilled::*;
+pub use episodic::*;
 pub use scroll::record_evicted_turn;
+pub use working::*;

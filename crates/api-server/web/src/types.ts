@@ -103,3 +103,56 @@ export const BUILTIN_TOOLS = [
   { name: 'time', description: 'Gets the current time' },
   { name: 'shell', description: 'Executes shell commands' },
 ] as const;
+
+// ── Observe types ────────────────────────────────────────
+
+export interface TraceSummary {
+  id: string;
+  agent_id: string;
+  session_id?: string | null;
+  start_time: string;
+  end_time?: string | null;
+  status: string;
+  token_count?: number | null;
+  error?: string | null;
+  span_count?: number | null;
+}
+
+export interface SpanSummary {
+  id: string;
+  trace_id: string;
+  parent_span_id?: string | null;
+  name: string;
+  start_time: string;
+  end_time?: string | null;
+  metadata: unknown;
+  token_count?: number | null;
+}
+
+export interface TraceDetail {
+  id: string;
+  agent_id: string;
+  session_id?: string | null;
+  start_time: string;
+  end_time?: string | null;
+  status: string;
+  token_count?: number | null;
+  error?: string | null;
+  spans: SpanSummary[];
+}
+
+export interface MetricPoint {
+  id: string;
+  name: string;
+  value: number;
+  tags: unknown;
+  timestamp: string;
+}
+
+export interface DashboardStats {
+  total_traces: number;
+  completed_traces: number;
+  failed_traces: number;
+  avg_latency_ms?: number | null;
+  total_tokens: number;
+}
