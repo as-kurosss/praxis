@@ -206,4 +206,4 @@ Context ──► Graph ──► Node (Loop)
 - **Integration tests** in `tests/` directories
 - **Mock LLM clients** via trait implementations
 - **Wiremock** for HTTP-based providers
-- **133+ tests** across core, runtime, and API server
+|- **323+ tests** across core, runtime, and API server
