@@ -1,16 +1,39 @@
-use clap::Parser;
-use praxis_core::agent::{
-    Agent, AgentConfig, TaskId, TaskTracker, Tool, ToolCategory, ToolError, ToolSet, ToolSpec,
-};
+mod agents;
+mod doctor;
+mod skills;
+
+use clap::{Parser, Subcommand};
+use praxis_core::agent::{Agent, AgentConfig, Tool, ToolCategory, ToolError, ToolSet, ToolSpec};
 use praxis_core::loops::{Context, CycleType, Loop, LoopId, StopCondition};
 use praxis_runtime::OpenAiClient;
 use serde_json::Value;
 use std::time::Duration;
 
+// ── CLI ───────────────────────────────────────────────────────────────────
+
 /// Praxis — Agent Orchestration Framework
 #[derive(Parser)]
 #[command(version, about)]
-struct Args {
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Run an agent with a prompt
+    Run(RunArgs),
+    /// Diagnose the system and optionally fix issues
+    Doctor(doctor::DoctorArgs),
+    /// Manage skills (agent definitions)
+    Skills(skills::SkillsArgs),
+    /// Manage agents
+    Agents(agents::AgentsArgs),
+}
+
+/// Arguments for `praxis run`.
+#[derive(Parser)]
+struct RunArgs {
     /// Prompt to send to the agent
     prompt: String,
 
@@ -41,10 +64,6 @@ struct Args {
     /// Tool specification(s) in `name=description:json_schema` format
     #[arg(long = "tool", value_name = "NAME=DESC:JSON_SCHEMA")]
     tools: Vec<String>,
-
-    /// Run the agent in background mode (returns immediately with task ID)
-    #[arg(long, default_value_t = false)]
-    background: bool,
 }
 
 // ── Built-in tools ────────────────────────────────────────────────────────
@@ -136,10 +155,32 @@ fn parse_tool_arg(input: &str) -> Result<ToolSpec, String> {
     })
 }
 
+// ── Entry point ───────────────────────────────────────────────────────────
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = Args::parse();
+    let cli = Cli::parse();
 
+    match cli.command {
+        Command::Run(args) => run_agent(args).await,
+        Command::Doctor(ref args) => {
+            doctor::execute(args).await;
+            Ok(())
+        }
+        Command::Skills(ref args) => {
+            skills::execute(args);
+            Ok(())
+        }
+        Command::Agents(ref args) => {
+            agents::execute(args);
+            Ok(())
+        }
+    }
+}
+
+// ── Agent execution (moved from original main) ───────────────────────────
+
+async fn run_agent(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
     // Resolve API key: arg > env > error
     let api_key = match args.api_key {
         Some(k) => k,
@@ -171,7 +212,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         client,
         AgentConfig {
             model: args.model.clone(),
-            model_id: None,
             system_prompt: "You are a helpful assistant.".into(),
             temperature: None,
             max_tokens: None,
@@ -191,38 +231,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.prompt,
     );
 
-    if args.background {
-        // Background mode: spawn via TaskTracker
-        let tracker = TaskTracker::new();
-        let task_id = TaskId::new();
-        let handle = tracker
-            .spawn_background(task_id.clone(), agent, ctx, Vec::new())
-            .await;
+    let mut state = Vec::new();
+    let result = agent.execute(ctx, &mut state).await;
 
-        println!("Task {} started in background", task_id);
-        println!("Use the API to poll status at GET /api/tasks/{}", task_id.0);
-
-        // Wait a bit and show initial status
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        let summary = handle.summary().await;
-        println!("Status: {:?}", summary.status);
-        println!("Elapsed: {}ms", summary.elapsed_ms);
-    } else {
-        let mut state = Vec::new();
-        let result = agent.execute(ctx, &mut state).await;
-
-        if result.is_success() {
-            if let Some(output) = &result.output {
-                println!("{output}");
-            }
-        } else {
-            eprintln!(
-                "Agent failed after {} iterations ({duration_ms}ms): {status:?}",
-                result.iterations,
-                duration_ms = result.duration_ms,
-                status = result.status,
-            );
+    if result.is_success() {
+        if let Some(output) = &result.output {
+            println!("{output}");
         }
+    } else {
+        eprintln!(
+            "Agent failed after {} iterations ({duration_ms}ms): {status:?}",
+            result.iterations,
+            duration_ms = result.duration_ms,
+            status = result.status,
+        );
     }
 
     Ok(())
