@@ -10,7 +10,6 @@
 //! let client = OpenAiClient::new("http://localhost:11434/v1", "ollama", "llama3");
 //! ```
 
-use std::collections::HashMap;
 use futures::StreamExt;
 use praxis_core::agent::{
     ChatMessage, ChatRequest, ChatResponse, LlmClient, LlmError, Role, StreamChunk, ToolCall,
@@ -18,6 +17,7 @@ use praxis_core::agent::{
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 // ── OpenAI API types (internal, for JSON serialization) ────────────────
 
 /// Request body for `OpenAI` chat completions API.
@@ -293,10 +293,12 @@ impl OpenAiClient {
     async fn send_request(&self, request: &OpenAiRequest) -> Result<ChatResponse, OpenAiError> {
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
 
-        tracing::info!("LLM request to {url}: model={}, messages={}, tools={}",
+        tracing::info!(
+            "LLM request to {url}: model={}, messages={}, tools={}",
             request.model,
             request.messages.len(),
-            request.tools.as_ref().map_or(0, |t| t.len()));
+            request.tools.as_ref().map_or(0, |t| t.len())
+        );
 
         if let Some(tools) = &request.tools {
             for t in tools {
@@ -392,20 +394,21 @@ impl OpenAiClient {
             let mut tool_call_names: HashMap<String, String> = HashMap::new();
 
             // Helper: flush accumulated tool call arguments as ToolCallArguments chunks
-            let flush_tool_call_args = |tx: &tokio::sync::mpsc::Sender<StreamChunk>,
-                                        args: &HashMap<String, String>,
-                                        names: &HashMap<String, String>| {
-                for (id, _name) in names {
-                    if let Some(args_str) = args.get(id) {
-                        if let Ok(parsed) = serde_json::from_str(args_str) {
-                            let _ = tx.try_send(StreamChunk::ToolCallArguments {
-                                id: id.clone(),
-                                arguments: parsed,
-                            });
+            let flush_tool_call_args =
+                |tx: &tokio::sync::mpsc::Sender<StreamChunk>,
+                 args: &HashMap<String, String>,
+                 names: &HashMap<String, String>| {
+                    for (id, _name) in names {
+                        if let Some(args_str) = args.get(id) {
+                            if let Ok(parsed) = serde_json::from_str(args_str) {
+                                let _ = tx.try_send(StreamChunk::ToolCallArguments {
+                                    id: id.clone(),
+                                    arguments: parsed,
+                                });
+                            }
                         }
                     }
-                }
-            };
+                };
 
             while let Some(chunk_result) = stream.next().await {
                 let bytes = match chunk_result {

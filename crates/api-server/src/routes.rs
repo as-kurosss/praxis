@@ -21,20 +21,17 @@
 
 use crate::state::AppState;
 use axum::{
+    Router,
     extract::{Path, State},
     http::StatusCode,
-    response::{sse::Event, Json, Sse},
+    response::{Json, Sse, sse::Event},
     routing::{get, post, put},
-    Router,
 };
-use tower_http::services::{ServeDir, ServeFile};
-use praxis_core::agent::{
-    Agent, AgentConfig, ChatMessage, StreamChunk, ToolSet,
-};
+use futures::stream::{self, StreamExt};
+use praxis_core::agent::{Agent, AgentConfig, ChatMessage, StreamChunk, ToolSet};
 use praxis_core::loops::{Context, CycleType, Loop, LoopId, StopCondition};
 use praxis_core::registry::{
-    AgentDefinition, ProviderConfig, ProviderKind, ScrollConfig, Session,
-    ToolBinding,
+    AgentDefinition, ProviderConfig, ProviderKind, ScrollConfig, Session, ToolBinding,
 };
 use praxis_core::tools::{CalculatorTool, CustomTool, TimeTool};
 use praxis_runtime::{AnthropicClient, GeminiClient, OpenAiClient};
@@ -42,7 +39,7 @@ use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::time::Duration;
 use tokio_stream::wrappers::ReceiverStream;
-use futures::stream::{self, StreamExt};
+use tower_http::services::{ServeDir, ServeFile};
 
 // ── Response wrapper ──────────────────────────────────────────────────
 
@@ -55,12 +52,20 @@ struct ApiResponse<T: Serialize> {
 
 impl<T: Serialize> ApiResponse<T> {
     fn ok(data: T) -> Json<Self> {
-        Json(Self { success: true, data: Some(data), error: None })
+        Json(Self {
+            success: true,
+            data: Some(data),
+            error: None,
+        })
     }
     fn err(msg: impl Into<String>) -> (StatusCode, Json<Self>) {
         (
             StatusCode::BAD_REQUEST,
-            Json(Self { success: false, data: None, error: Some(msg.into()) }),
+            Json(Self {
+                success: false,
+                data: None,
+                error: Some(msg.into()),
+            }),
         )
     }
 }
@@ -140,22 +145,30 @@ struct SessionSummaryResponse {
 pub fn router(state: AppState) -> Router {
     let dist_dir = state.dist_dir.clone();
 
-    let serve_dir = ServeDir::new(&dist_dir)
-        .fallback(ServeFile::new(dist_dir.join("index.html")));
+    let serve_dir = ServeDir::new(&dist_dir).fallback(ServeFile::new(dist_dir.join("index.html")));
 
     Router::new()
         // Provider CRUD
         .route("/api/providers", get(list_providers).post(create_provider))
-        .route("/api/providers/{id}", put(update_provider).delete(delete_provider))
+        .route(
+            "/api/providers/{id}",
+            put(update_provider).delete(delete_provider),
+        )
         // Agent CRUD
         .route("/api/agents", get(list_agents).post(create_agent))
-        .route("/api/agents/{id}", get(get_agent).put(update_agent).delete(delete_agent))
+        .route(
+            "/api/agents/{id}",
+            get(get_agent).put(update_agent).delete(delete_agent),
+        )
         // Chat
         .route("/api/agents/{id}/chat", post(chat_handler))
         .route("/api/agents/{id}/chat/stream", get(chat_stream_handler))
         // Sessions
         .route("/api/agents/{id}/sessions", get(list_sessions))
-        .route("/api/sessions/{id}", get(get_session_detail).delete(delete_session))
+        .route(
+            "/api/sessions/{id}",
+            get(get_session_detail).delete(delete_session),
+        )
         .with_state(state)
         // Static files (SPA)
         .fallback_service(serve_dir)
@@ -167,14 +180,22 @@ fn build_tool_set(tools: &[ToolBinding]) -> ToolSet {
     let mut ts = ToolSet::new();
     for binding in tools {
         match binding {
-            ToolBinding::Builtin { name, enabled: true } => {
+            ToolBinding::Builtin {
+                name,
+                enabled: true,
+            } => {
                 match name.as_str() {
                     "calculator" => ts.add(CalculatorTool),
                     "time" | "current_time" => ts.add(TimeTool),
                     _ => { /* unknown builtin — skip */ }
                 }
             }
-            ToolBinding::Custom { name, description, schema, enabled: true } => {
+            ToolBinding::Custom {
+                name,
+                description,
+                schema,
+                enabled: true,
+            } => {
                 ts.add(CustomTool::new(name, description, schema.clone()));
             }
             _ => {}
@@ -186,10 +207,14 @@ fn build_tool_set(tools: &[ToolBinding]) -> ToolSet {
 fn scroll_strategy(config: &ScrollConfig) -> Option<praxis_core::memory::ScrollStrategy> {
     match config {
         ScrollConfig::Truncate { max_messages } => {
-            Some(praxis_core::memory::ScrollStrategy::Truncate { max_messages: *max_messages })
+            Some(praxis_core::memory::ScrollStrategy::Truncate {
+                max_messages: *max_messages,
+            })
         }
         ScrollConfig::SlidingWindow { window_size } => {
-            Some(praxis_core::memory::ScrollStrategy::SlidingWindow { window_size: *window_size })
+            Some(praxis_core::memory::ScrollStrategy::SlidingWindow {
+                window_size: *window_size,
+            })
         }
         ScrollConfig::NoOp => None,
     }
@@ -207,6 +232,8 @@ fn truncate(s: &str, max: usize) -> String {
 fn openai_client(provider: &ProviderConfig) -> OpenAiClient {
     let default_url = if provider.kind == ProviderKind::Ollama {
         "http://localhost:11434/v1"
+    } else if provider.kind == ProviderKind::LmStudio {
+        "http://localhost:1234/v1"
     } else {
         "https://api.openai.com/v1"
     };
@@ -223,12 +250,18 @@ async fn run_agent_execution(
     state: &mut Vec<ChatMessage>,
 ) -> praxis_core::loops::LoopResult<String> {
     match provider.kind {
-        ProviderKind::Openai | ProviderKind::Ollama => {
+        ProviderKind::Openai
+        | ProviderKind::Ollama
+        | ProviderKind::Custom
+        | ProviderKind::LmStudio => {
             let agent = Agent::with_tools(openai_client(provider), config, tool_set);
             agent.execute(ctx, state).await
         }
         ProviderKind::Anthropic => {
-            let url = provider.api_url.as_deref().unwrap_or("https://api.anthropic.com/v1");
+            let url = provider
+                .api_url
+                .as_deref()
+                .unwrap_or("https://api.anthropic.com/v1");
             let client = AnthropicClient::new(url, &provider.api_key, &provider.model);
             let agent = Agent::with_tools(client, config, tool_set);
             agent.execute(ctx, state).await
@@ -251,12 +284,18 @@ async fn run_agent_streaming(
     tx: tokio::sync::mpsc::Sender<StreamChunk>,
 ) -> praxis_core::loops::LoopResult<String> {
     match provider.kind {
-        ProviderKind::Openai | ProviderKind::Ollama => {
+        ProviderKind::Openai
+        | ProviderKind::Ollama
+        | ProviderKind::Custom
+        | ProviderKind::LmStudio => {
             let agent = Agent::with_tools(openai_client(provider), config, tool_set);
             agent.execute_stream(ctx, state, tx).await
         }
         ProviderKind::Anthropic => {
-            let url = provider.api_url.as_deref().unwrap_or("https://api.anthropic.com/v1");
+            let url = provider
+                .api_url
+                .as_deref()
+                .unwrap_or("https://api.anthropic.com/v1");
             let client = AnthropicClient::new(url, &provider.api_key, &provider.model);
             let agent = Agent::with_tools(client, config, tool_set);
             agent.execute_stream(ctx, state, tx).await
@@ -271,9 +310,7 @@ async fn run_agent_streaming(
 
 // ── Provider CRUD ────────────────────────────────────────────────────
 
-async fn list_providers(
-    State(state): State<AppState>,
-) -> Json<ApiResponse<Vec<ProviderConfig>>> {
+async fn list_providers(State(state): State<AppState>) -> Json<ApiResponse<Vec<ProviderConfig>>> {
     ApiResponse::ok(state.registry.list_providers())
 }
 
@@ -291,9 +328,10 @@ async fn create_provider(
         model: body.model,
         notes: None,
     };
-    state.registry.upsert_provider(config.clone()).map_err(|e| {
-        ApiResponse::err(format!("Failed to save provider: {e}"))
-    })?;
+    state
+        .registry
+        .upsert_provider(config.clone())
+        .map_err(|e| ApiResponse::err(format!("Failed to save provider: {e}")))?;
     Ok(ApiResponse::ok(config))
 }
 
@@ -311,9 +349,10 @@ async fn update_provider(
         model: body.model,
         notes: None,
     };
-    state.registry.upsert_provider(config.clone()).map_err(|e| {
-        ApiResponse::err(format!("Failed to save provider: {e}"))
-    })?;
+    state
+        .registry
+        .upsert_provider(config.clone())
+        .map_err(|e| ApiResponse::err(format!("Failed to save provider: {e}")))?;
     Ok(ApiResponse::ok(config))
 }
 
@@ -321,17 +360,16 @@ async fn delete_provider(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<bool>>, (StatusCode, Json<ApiResponse<bool>>)> {
-    state.registry.delete_provider(&id).map_err(|e| {
-        ApiResponse::err(format!("Failed to delete provider: {e}"))
-    })?;
+    state
+        .registry
+        .delete_provider(&id)
+        .map_err(|e| ApiResponse::err(format!("Failed to delete provider: {e}")))?;
     Ok(ApiResponse::ok(true))
 }
 
 // ── Agent CRUD ───────────────────────────────────────────────────────
 
-async fn list_agents(
-    State(state): State<AppState>,
-) -> Json<ApiResponse<Vec<AgentSummary>>> {
+async fn list_agents(State(state): State<AppState>) -> Json<ApiResponse<Vec<AgentSummary>>> {
     let agents = state.registry.list_agents();
     let summaries: Vec<AgentSummary> = agents
         .into_iter()
@@ -378,9 +416,10 @@ async fn create_agent(
         created_at: now.clone(),
         updated_at: now,
     };
-    state.registry.upsert_agent(def.clone()).map_err(|e| {
-        ApiResponse::err(format!("Failed to save agent: {e}"))
-    })?;
+    state
+        .registry
+        .upsert_agent(def.clone())
+        .map_err(|e| ApiResponse::err(format!("Failed to save agent: {e}")))?;
     Ok(ApiResponse::ok(def))
 }
 
@@ -410,9 +449,10 @@ async fn update_agent(
         created_at,
         updated_at: now,
     };
-    state.registry.upsert_agent(def.clone()).map_err(|e| {
-        ApiResponse::err(format!("Failed to save agent: {e}"))
-    })?;
+    state
+        .registry
+        .upsert_agent(def.clone())
+        .map_err(|e| ApiResponse::err(format!("Failed to save agent: {e}")))?;
     Ok(ApiResponse::ok(def))
 }
 
@@ -420,9 +460,10 @@ async fn delete_agent(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<bool>>, (StatusCode, Json<ApiResponse<bool>>)> {
-    state.registry.delete_agent(&id).map_err(|e| {
-        ApiResponse::err(format!("Failed to delete agent: {e}"))
-    })?;
+    state
+        .registry
+        .delete_agent(&id)
+        .map_err(|e| ApiResponse::err(format!("Failed to delete agent: {e}")))?;
     Ok(ApiResponse::ok(true))
 }
 
@@ -458,9 +499,9 @@ async fn chat_handler(
     };
 
     // 5. Get or create session
-    let session_id = body.session_id.unwrap_or_else(|| {
-        format!("sess_{}", uuid::Uuid::new_v4())
-    });
+    let session_id = body
+        .session_id
+        .unwrap_or_else(|| format!("sess_{}", uuid::Uuid::new_v4()));
 
     // 6. Build context
     let ctx = Context::new(
@@ -495,7 +536,10 @@ async fn chat_handler(
             session_id,
             message: output,
         })),
-        None => Err(ApiResponse::err(format!("Agent failed: {:?}", result.status))),
+        None => Err(ApiResponse::err(format!(
+            "Agent failed: {:?}",
+            result.status
+        ))),
     }
 }
 
@@ -527,9 +571,9 @@ async fn chat_stream_handler(
         scroll_strategy: scroll_strategy(&def.scroll_strategy),
     };
 
-    let session_id = params.session_id.unwrap_or_else(|| {
-        format!("sess_{}", uuid::Uuid::new_v4())
-    });
+    let session_id = params
+        .session_id
+        .unwrap_or_else(|| format!("sess_{}", uuid::Uuid::new_v4()));
 
     let ctx = Context::new(
         LoopId::new(),
@@ -552,8 +596,14 @@ async fn chat_stream_handler(
 
     tokio::spawn(async move {
         let _result = run_agent_streaming(
-            &provider, config, tool_set, ctx, &mut state_messages, tx.clone(),
-        ).await;
+            &provider,
+            config,
+            tool_set,
+            ctx,
+            &mut state_messages,
+            tx.clone(),
+        )
+        .await;
 
         // IMPORTANT: Drop the original tx sender IMMEDIATELY after streaming
         // completes, BEFORE saving the session.  The Sse stream wraps rx
@@ -577,38 +627,26 @@ async fn chat_stream_handler(
 
     // Prepend a session_id event so the frontend knows the session
     let session_event = stream::once(async move {
-        Ok(Event::default().data(session_id_for_event).event("session_id"))
+        Ok(Event::default()
+            .data(session_id_for_event)
+            .event("session_id"))
     });
 
     let stream = session_event.chain(ReceiverStream::new(rx).map(|chunk| {
         match chunk {
-            StreamChunk::Token(text) => {
-                Ok(Event::default().data(text).event("token"))
-            }
-            StreamChunk::Reasoning(text) => {
-                Ok(Event::default().data(text).event("reasoning"))
-            }
-            StreamChunk::ToolCallStart { id, name } => {
-                Ok(Event::default()
-                    .data(serde_json::json!({"id": id, "name": name}).to_string())
-                    .event("tool_call_start"))
-            }
-            StreamChunk::ToolCallEnd { id } => {
-                Ok(Event::default()
-                    .data(serde_json::json!({"id": id}).to_string())
-                    .event("tool_call_end"))
-            }
-            StreamChunk::ToolCallArguments { id, arguments } => {
-                Ok(Event::default()
-                    .data(serde_json::json!({"id": id, "arguments": arguments}).to_string())
-                    .event("tool_call_arguments"))
-            }
-            StreamChunk::Done => {
-                Ok(Event::default().data("").event("done"))
-            }
-            StreamChunk::Error(msg) => {
-                Ok(Event::default().data(msg).event("error"))
-            }
+            StreamChunk::Token(text) => Ok(Event::default().data(text).event("token")),
+            StreamChunk::Reasoning(text) => Ok(Event::default().data(text).event("reasoning")),
+            StreamChunk::ToolCallStart { id, name } => Ok(Event::default()
+                .data(serde_json::json!({"id": id, "name": name}).to_string())
+                .event("tool_call_start")),
+            StreamChunk::ToolCallEnd { id } => Ok(Event::default()
+                .data(serde_json::json!({"id": id}).to_string())
+                .event("tool_call_end")),
+            StreamChunk::ToolCallArguments { id, arguments } => Ok(Event::default()
+                .data(serde_json::json!({"id": id, "arguments": arguments}).to_string())
+                .event("tool_call_arguments")),
+            StreamChunk::Done => Ok(Event::default().data("").event("done")),
+            StreamChunk::Error(msg) => Ok(Event::default().data(msg).event("error")),
         }
     }));
 
@@ -685,9 +723,9 @@ async fn delete_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<bool>>, (StatusCode, Json<ApiResponse<bool>>)> {
-    state.sessions.delete_session(&id).map_err(|e| {
-        ApiResponse::err(format!("Failed to delete session: {e}"))
-    })?;
+    state
+        .sessions
+        .delete_session(&id)
+        .map_err(|e| ApiResponse::err(format!("Failed to delete session: {e}")))?;
     Ok(ApiResponse::ok(true))
 }
-

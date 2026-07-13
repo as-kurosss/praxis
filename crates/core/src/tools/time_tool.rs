@@ -1,7 +1,7 @@
 //! **TimeTool** — provides the current date and time.
 
 use crate::agent::tool::{Tool, ToolError, ToolSpec};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// A tool that returns the current system date and time.
@@ -24,12 +24,13 @@ impl Tool for TimeTool {
     }
 
     async fn call(&self, _args: Value) -> Result<Value, ToolError> {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|e| ToolError::Execution {
-                tool: "current_time".into(),
-                message: format!("time error: {e}"),
-            })?;
+        let now =
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|e| ToolError::Execution {
+                    tool: "current_time".into(),
+                    message: format!("time error: {e}"),
+                })?;
 
         let unix_secs = now.as_secs();
         let millis = now.subsec_millis();
@@ -114,6 +115,11 @@ mod tests {
         let result = tokio::runtime::Runtime::new().unwrap().block_on(result);
         assert!(result.is_ok());
         let val = result.unwrap();
-        assert!(val.get("unix_timestamp_secs").and_then(Value::as_u64).unwrap() > 1_700_000_000);
+        assert!(
+            val.get("unix_timestamp_secs")
+                .and_then(Value::as_u64)
+                .unwrap()
+                > 1_700_000_000
+        );
     }
 }

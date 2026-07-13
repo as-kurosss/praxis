@@ -17,11 +17,7 @@ pub struct CustomTool {
 
 impl CustomTool {
     /// Create a new custom tool with the given name, description, and JSON schema.
-    pub fn new(
-        name: impl Into<String>,
-        description: impl Into<String>,
-        schema: Value,
-    ) -> Self {
+    pub fn new(name: impl Into<String>, description: impl Into<String>, schema: Value) -> Self {
         Self {
             spec: ToolSpec {
                 name: name.into(),

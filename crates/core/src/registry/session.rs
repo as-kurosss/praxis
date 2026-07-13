@@ -115,7 +115,11 @@ impl SessionStore {
 
     /// Get a session by ID.
     pub fn get_session(&self, id: &str) -> Option<Session> {
-        self.cache.lock().unwrap_or_else(|e| e.into_inner()).get(id).cloned()
+        self.cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+            .cloned()
     }
 
     /// Add or update a session.

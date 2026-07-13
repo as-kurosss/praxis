@@ -123,10 +123,7 @@ where
 
         for summary in &self.summaries[start..] {
             if !summary.topics.is_empty() {
-                context.push_str(&format!(
-                    "### Topics: {}\n",
-                    summary.topics.join(", ")
-                ));
+                context.push_str(&format!("### Topics: {}\n", summary.topics.join(", ")));
             }
             context.push_str(&summary.summary);
             context.push('\n');
@@ -217,9 +214,7 @@ mod tests {
 
     #[test]
     fn test_latest() {
-        let mut mem = DistilledMemory::new(1, |_: &[ChatMessage]| {
-            ("summary".into(), vec![])
-        });
+        let mut mem = DistilledMemory::new(1, |_: &[ChatMessage]| ("summary".into(), vec![]));
 
         mem.record_turn(&[ChatMessage::assistant("a")]);
         mem.record_turn(&[ChatMessage::assistant("b")]);
@@ -231,9 +226,7 @@ mod tests {
 
     #[test]
     fn test_clear_resets_state() {
-        let mut mem = DistilledMemory::new(1, |_: &[ChatMessage]| {
-            ("x".into(), vec![])
-        });
+        let mut mem = DistilledMemory::new(1, |_: &[ChatMessage]| ("x".into(), vec![]));
         mem.record_turn(&[ChatMessage::assistant("a")]);
         assert!(!mem.summaries().is_empty());
         mem.clear();
