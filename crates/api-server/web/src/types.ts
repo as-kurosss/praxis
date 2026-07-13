@@ -1,6 +1,6 @@
 // ── Mirror of Rust praxis_core::registry types ──────────────────
 
-export type ProviderKind = 'openai' | 'anthropic' | 'gemini' | 'ollama' | 'custom' | 'lm_studio';
+export type ProviderKind = 'openai' | 'anthropic' | 'gemini' | 'ollama';
 
 export interface ProviderConfig {
   id: string;
@@ -104,139 +104,55 @@ export const BUILTIN_TOOLS = [
   { name: 'shell', description: 'Executes shell commands' },
 ] as const;
 
-// ── Skills ──
+// ── Observe types ────────────────────────────────────────
 
-export interface SkillDefinition {
+export interface TraceSummary {
   id: string;
-  name: string;
-  description: string;
-  enabled: boolean;
-  source_url?: string | null;
-  version?: string | null;
-  created_at: string;
-}
-
-export interface SkillImportRequest {
-  url: string;
-  name?: string;
-}
-
-// ── Settings ──
-
-export interface AppSettings {
-  default_scroll_strategy: ScrollConfig;
-  default_model: string;
-  default_temperature: number | null;
-  default_max_tokens: number | null;
-  theme: 'dark' | 'light';
-  language: string;
-}
-
-// ── Memory ──
-
-export interface MemorySearchResult {
-  id: string;
-  content: string;
   agent_id: string;
-  session_id: string;
-  similarity: number;
-  created_at: string;
+  session_id?: string | null;
+  start_time: string;
+  end_time?: string | null;
+  status: string;
+  token_count?: number | null;
+  error?: string | null;
+  span_count?: number | null;
 }
 
-export interface MemoryEntry {
-  id: string;
-  content: string;
-  agent_id: string;
-  session_id: string;
-  created_at: string;
-  last_accessed_at: string;
-}
-
-export interface DreamConfig {
-  enabled: boolean;
-  interval_minutes: number;
-  max_memories: number;
-  consolidation_strategy: 'summary' | 'cluster' | 'none';
-}
-
-export interface RetentionConfig {
-  max_memories: number;
-  ttl_days: number;
-  importance_threshold: number;
-}
-
-// ── Security ──
-
-export type PolicyAction = 'allow' | 'deny' | 'ask';
-
-export interface SecurityPolicy {
-  id: string;
-  name: string;
-  description: string;
-  action: PolicyAction;
-  rules: SecurityRule[];
-}
-
-export interface SecurityRule {
-  id: string;
-  name: string;
-  action: PolicyAction;
-  pattern: string;
-}
-
-export interface SandboxConfig {
-  enabled: boolean;
-  docker_image: string;
-  network_access: boolean;
-  filesystem_access: 'read' | 'read_write' | 'none';
-  timeout_seconds: number;
-  memory_limit_mb: number;
-}
-
-export interface ShellEvasionRule {
-  id: string;
-  name: string;
-  enabled: boolean;
-  pattern: string;
-  description: string;
-}
-
-// ── Observability ──
-
-export interface TraceSpan {
+export interface SpanSummary {
   id: string;
   trace_id: string;
+  parent_span_id?: string | null;
   name: string;
   start_time: string;
-  end_time: string;
-  duration_ms: number;
-  status: 'ok' | 'error' | 'cancelled';
-  metadata?: Record<string, unknown>;
+  end_time?: string | null;
+  metadata: unknown;
+  token_count?: number | null;
 }
 
-export interface Trace {
+export interface TraceDetail {
   id: string;
   agent_id: string;
-  session_id: string;
-  spans: TraceSpan[];
-  total_duration_ms: number;
-  total_tokens: number;
-  created_at: string;
+  session_id?: string | null;
+  start_time: string;
+  end_time?: string | null;
+  status: string;
+  token_count?: number | null;
+  error?: string | null;
+  spans: SpanSummary[];
 }
 
-export interface TokenUsage {
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
-  cost: number;
-}
-
-// ── Logs ──
-
-export interface LogEntry {
+export interface MetricPoint {
+  id: string;
+  name: string;
+  value: number;
+  tags: unknown;
   timestamp: string;
-  level: 'trace' | 'debug' | 'info' | 'warn' | 'error';
-  message: string;
-  target: string;
-  fields?: Record<string, unknown>;
+}
+
+export interface DashboardStats {
+  total_traces: number;
+  completed_traces: number;
+  failed_traces: number;
+  avg_latency_ms?: number | null;
+  total_tokens: number;
 }

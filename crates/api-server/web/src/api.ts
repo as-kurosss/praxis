@@ -1,8 +1,7 @@
 import type {
   ApiResponse, ProviderConfig, AgentDefinition, AgentSummary,
   ChatResponse, SessionSummary, Session,
-  SkillDefinition, AppSettings, MemorySearchResult,
-  SecurityPolicy, Trace, LogEntry,
+  TraceSummary, TraceDetail, SpanSummary, MetricPoint, DashboardStats,
 } from './types';
 
 class ApiError extends Error {
@@ -84,68 +83,24 @@ export async function deleteSession(id: string): Promise<boolean> {
   return request(`/api/sessions/${id}`, { method: 'DELETE' });
 }
 
-// ── Skills ──
+// ── Observe ──
 
-export async function listSkills(): Promise<SkillDefinition[]> {
-  return request('/api/skills');
-}
-
-export async function createSkill(body: Partial<SkillDefinition>): Promise<SkillDefinition> {
-  return request('/api/skills', { method: 'POST', body: JSON.stringify(body) });
-}
-
-export async function deleteSkill(id: string): Promise<boolean> {
-  return request(`/api/skills/${id}`, { method: 'DELETE' });
-}
-
-export async function toggleSkill(id: string, enabled: boolean): Promise<boolean> {
-  return request(`/api/skills/${id}/toggle`, { method: 'POST', body: JSON.stringify({ enabled }) });
-}
-
-export async function importSkill(url: string): Promise<SkillDefinition> {
-  return request('/api/skills/import', { method: 'POST', body: JSON.stringify({ url }) });
-}
-
-// ── Settings ──
-
-export async function getSettings(): Promise<AppSettings> {
-  return request('/api/settings');
-}
-
-export async function updateSettings(body: Partial<AppSettings>): Promise<AppSettings> {
-  return request('/api/settings', { method: 'PUT', body: JSON.stringify(body) });
-}
-
-// ── Memory ──
-
-export async function searchMemory(q: string): Promise<MemorySearchResult[]> {
-  return request(`/api/memory/search?q=${encodeURIComponent(q)}`);
-}
-
-// ── Security ──
-
-export async function listSecurityPolicies(): Promise<SecurityPolicy[]> {
-  return request('/api/security/policies');
-}
-
-// ── Observability ──
-
-export async function listTraces(): Promise<Trace[]> {
+export async function listTraces(): Promise<TraceSummary[]> {
   return request('/api/observe/traces');
 }
 
-// ── Logs ──
-
-export async function streamLogs(): Promise<LogEntry[]> {
-  return request('/api/logs');
+export async function getTraceDetail(id: string): Promise<TraceDetail> {
+  return request(`/api/observe/traces/${id}`);
 }
 
-// ── Session Title ──
-
-export async function getSessionTitle(id: string): Promise<Session> {
-  return request(`/api/sessions/${id}`);
+export async function getTraceSpans(id: string): Promise<SpanSummary[]> {
+  return request(`/api/observe/traces/${id}/spans`);
 }
 
-export async function updateSessionTitle(id: string, title: string): Promise<boolean> {
-  return request(`/api/sessions/${id}/title`, { method: 'PUT', body: JSON.stringify({ title }) });
+export async function listMetrics(): Promise<MetricPoint[]> {
+  return request('/api/observe/metrics');
+}
+
+export async function getDashboardStats(): Promise<DashboardStats> {
+  return request('/api/observe/stats');
 }

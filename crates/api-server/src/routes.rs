@@ -18,6 +18,8 @@
 //! | `GET` | `/api/agents/{id}/chat/stream` | SSE stream chat |
 //! | `GET` | `/api/agents/{id}/sessions` | List sessions for an agent |
 //! | `DELETE` | `/api/sessions/{id}` | Delete a session |
+//! | `GET` | `/api/observe/traces` | List observation traces |
+//! | `GET` | `/api/observe/traces/{id}/spans` | Get spans for a trace |
 
 use crate::state::AppState;
 use axum::{
@@ -169,6 +171,12 @@ pub fn router(state: AppState) -> Router {
             "/api/sessions/{id}",
             get(get_session_detail).delete(delete_session),
         )
+        // Observe
+        .route("/api/observe/traces", get(list_traces))
+        .route("/api/observe/traces/{id}", get(get_trace_detail))
+        .route("/api/observe/traces/{id}/spans", get(get_trace_spans))
+        .route("/api/observe/metrics", get(list_metrics))
+        .route("/api/observe/stats", get(get_dashboard_stats))
         .with_state(state)
         // Static files (SPA)
         .fallback_service(serve_dir)
@@ -720,4 +728,222 @@ async fn delete_session(
         .delete_session(&id)
         .map_err(|e| ApiResponse::err(format!("Failed to delete session: {e}")))?;
     Ok(ApiResponse::ok(true))
+}
+
+// ── Observe ────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct TraceSummaryResponse {
+    id: String,
+    agent_id: String,
+    session_id: Option<String>,
+    start_time: String,
+    end_time: Option<String>,
+    status: String,
+    token_count: Option<u64>,
+    error: Option<String>,
+    span_count: Option<usize>,
+}
+
+async fn list_traces(
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<TraceSummaryResponse>>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let filter = praxis_observe::trace::TraceFilter::default();
+    let traces = state
+        .observer
+        .query_traces(&filter)
+        .await
+        .map_err(|e| ApiResponse::err(format!("Failed to query traces: {e}")))?;
+
+    let mut summaries: Vec<TraceSummaryResponse> = Vec::new();
+    for trace in &traces {
+        let spans = state
+            .observer
+            .query_spans(&trace.id)
+            .await
+            .map_err(|e| ApiResponse::err(format!("Failed to query spans: {e}")))?;
+        summaries.push(TraceSummaryResponse {
+            id: trace.id.clone(),
+            agent_id: trace.agent_id.clone(),
+            session_id: trace.session_id.clone(),
+            start_time: trace.start_time.to_rfc3339(),
+            end_time: trace.end_time.map(|t| t.to_rfc3339()),
+            status: trace.status.to_string(),
+            token_count: trace.token_count,
+            error: trace.error.clone(),
+            span_count: Some(spans.len()),
+        });
+    }
+
+    Ok(ApiResponse::ok(summaries))
+}
+
+#[derive(Serialize)]
+struct SpanSummaryResponse {
+    id: String,
+    trace_id: String,
+    parent_span_id: Option<String>,
+    name: String,
+    start_time: String,
+    end_time: Option<String>,
+    metadata: serde_json::Value,
+    token_count: Option<u64>,
+}
+
+async fn get_trace_spans(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<ApiResponse<Vec<SpanSummaryResponse>>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let spans = state
+        .observer
+        .query_spans(&id)
+        .await
+        .map_err(|e| ApiResponse::err(format!("Failed to query spans: {e}")))?;
+
+    let result: Vec<SpanSummaryResponse> = spans
+        .into_iter()
+        .map(|s| SpanSummaryResponse {
+            id: s.id,
+            trace_id: s.trace_id,
+            parent_span_id: s.parent_span_id,
+            name: s.name.to_string(),
+            start_time: s.start_time.to_rfc3339(),
+            end_time: s.end_time.map(|t| t.to_rfc3339()),
+            metadata: s.metadata,
+            token_count: s.token_count,
+        })
+        .collect();
+
+    Ok(ApiResponse::ok(result))
+}
+
+#[derive(Serialize)]
+struct TraceDetailResponse {
+    id: String,
+    agent_id: String,
+    session_id: Option<String>,
+    start_time: String,
+    end_time: Option<String>,
+    status: String,
+    token_count: Option<u64>,
+    error: Option<String>,
+    spans: Vec<SpanSummaryResponse>,
+}
+
+async fn get_trace_detail(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<ApiResponse<TraceDetailResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let filter = praxis_observe::trace::TraceFilter {
+        search: None,
+        agent_id: None,
+        session_id: None,
+        status: None,
+        start_after: None,
+        start_before: None,
+        limit: None,
+        offset: None,
+    };
+    // We need to query specific trace - let's just query all and filter
+    let traces = state
+        .observer
+        .query_traces(&filter)
+        .await
+        .map_err(|e| ApiResponse::err(format!("Failed to query traces: {e}")))?;
+    let trace = traces
+        .into_iter()
+        .find(|t| t.id == id)
+        .ok_or_else(|| ApiResponse::err(format!("Trace '{id}' not found")))?;
+
+    let spans = state
+        .observer
+        .query_spans(&id)
+        .await
+        .map_err(|e| ApiResponse::err(format!("Failed to query spans: {e}")))?;
+
+    let span_summaries: Vec<SpanSummaryResponse> = spans
+        .into_iter()
+        .map(|s| SpanSummaryResponse {
+            id: s.id,
+            trace_id: s.trace_id,
+            parent_span_id: s.parent_span_id,
+            name: s.name.to_string(),
+            start_time: s.start_time.to_rfc3339(),
+            end_time: s.end_time.map(|t| t.to_rfc3339()),
+            metadata: s.metadata,
+            token_count: s.token_count,
+        })
+        .collect();
+
+    Ok(ApiResponse::ok(TraceDetailResponse {
+        id: trace.id,
+        agent_id: trace.agent_id,
+        session_id: trace.session_id,
+        start_time: trace.start_time.to_rfc3339(),
+        end_time: trace.end_time.map(|t| t.to_rfc3339()),
+        status: trace.status.to_string(),
+        token_count: trace.token_count,
+        error: trace.error,
+        spans: span_summaries,
+    }))
+}
+
+#[derive(Serialize)]
+struct MetricResponse {
+    id: String,
+    name: String,
+    value: f64,
+    tags: serde_json::Value,
+    timestamp: String,
+}
+
+async fn list_metrics(
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<MetricResponse>>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let metrics = state
+        .observer
+        .query_metrics(None, None, None, Some(100))
+        .await
+        .map_err(|e| ApiResponse::err(format!("Failed to query metrics: {e}")))?;
+
+    let result: Vec<MetricResponse> = metrics
+        .into_iter()
+        .map(|m| MetricResponse {
+            id: m.id,
+            name: m.name,
+            value: m.value,
+            tags: m.tags,
+            timestamp: m.timestamp.to_rfc3339(),
+        })
+        .collect();
+
+    Ok(ApiResponse::ok(result))
+}
+
+#[derive(Serialize)]
+struct DashboardStatsResponse {
+    total_traces: u64,
+    completed_traces: u64,
+    failed_traces: u64,
+    avg_latency_ms: Option<f64>,
+    total_tokens: u64,
+}
+
+async fn get_dashboard_stats(
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<DashboardStatsResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let since = Some(chrono::Utc::now() - chrono::Duration::days(1));
+    let stats = state
+        .observer
+        .dashboard_stats(since)
+        .await
+        .map_err(|e| ApiResponse::err(format!("Failed to get stats: {e}")))?;
+
+    Ok(ApiResponse::ok(DashboardStatsResponse {
+        total_traces: stats.0,
+        completed_traces: stats.1,
+        failed_traces: stats.2,
+        avg_latency_ms: stats.3,
+        total_tokens: stats.4,
+    }))
 }

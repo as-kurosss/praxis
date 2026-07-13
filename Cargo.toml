@@ -4,6 +4,7 @@ members = [
     "crates/api-server",
     "crates/core",
     "crates/cli",
+    "crates/observe",
     "crates/runtime",
     "crates/mcp",
     "examples",

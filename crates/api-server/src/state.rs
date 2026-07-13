@@ -1,8 +1,11 @@
 //! **AppState** — shared application state for the Praxis API server.
 //!
-//! Manages the persistent agent registry and session store.
+//! Manages the persistent agent registry, session store, and observability
+//! collector.
 
 use praxis_core::registry::{AgentRegistry, SessionStore};
+use praxis_observe::collector::TraceCollector;
+use praxis_observe::exporter::SqliteExporter;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -13,6 +16,8 @@ pub struct AppState {
     pub registry: Arc<AgentRegistry>,
     /// Persistent session store.
     pub sessions: Arc<SessionStore>,
+    /// Observability trace collector.
+    pub observer: Arc<TraceCollector>,
     /// Data directory path.
     pub data_dir: PathBuf,
     /// Web dist directory for static files.
@@ -38,9 +43,16 @@ impl AppState {
             .join("web")
             .join("dist");
 
+        // Initialise observe with SQLite backend
+        let db_path = data_dir.join("observe.db");
+        let exporter = SqliteExporter::open(db_path)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let observer = Arc::new(TraceCollector::new(Arc::new(exporter)));
+
         Ok(Self {
             registry: Arc::new(registry),
             sessions: Arc::new(sessions),
+            observer,
             data_dir,
             dist_dir,
         })
