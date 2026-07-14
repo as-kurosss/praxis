@@ -160,6 +160,23 @@ impl GovernanceRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Permissive матрица всегда Allow для любой категории.
+        #[test]
+        fn permissive_governance_allows_all(agent_name: String, category: ToolCategory) {
+            let g = AgentGovernance::permissive(agent_name);
+            assert_eq!(g.evaluate(&category, None), AccessPolicy::Allow);
+        }
+
+        /// Restricted матрица всегда Deny без правил.
+        #[test]
+        fn restricted_governance_denies_all(agent_name: String, category: ToolCategory) {
+            let g = AgentGovernance::restricted(agent_name);
+            assert_eq!(g.evaluate(&category, None), AccessPolicy::Deny);
+        }
+    }
 
     #[test]
     fn test_agent_governance_default_allow() {

@@ -125,3 +125,25 @@ impl ToolSet {
         tool.call(args).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    impl Arbitrary for ToolCategory {
+        type Parameters = ();
+        type Strategy = proptest::strategy::BoxedStrategy<Self>;
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            proptest::prop_oneof![
+                Just(ToolCategory::Generic),
+                Just(ToolCategory::Shell),
+                Just(ToolCategory::FileRead),
+                Just(ToolCategory::FileWrite),
+                Just(ToolCategory::Network),
+            ]
+            .boxed()
+        }
+    }
+}

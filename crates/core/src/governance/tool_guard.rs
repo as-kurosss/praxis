@@ -119,6 +119,33 @@ impl ToolGuard {
 mod tests {
     use super::*;
     use crate::agent::tool::ToolCategory;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// AllowAll разрешает любой инструмент.
+        #[test]
+        fn tool_guard_allow_all_allows_everything(tool_name: String, category: ToolCategory) {
+            let guard = ToolGuard::allow_all();
+            assert!(guard.is_allowed(&tool_name, &category));
+        }
+
+        /// AllowList с пустым списком запрещает всё.
+        #[test]
+        fn empty_allow_list_denies_all(tool_name: String, category: ToolCategory) {
+            let guard = ToolGuard::allow_list(Vec::<String>::new());
+            assert!(!guard.is_allowed(&tool_name, &category));
+        }
+
+        /// BlockList разрешает всё, кроме перечисленного.
+        #[test]
+        fn block_list_allows_unknown_tools(tool_name: String, category: ToolCategory) {
+            let guard = ToolGuard::block_list(vec!["blocked_tool"]);
+            // Неизвестный инструмент должен быть разрешён
+            if tool_name != "blocked_tool" {
+                assert!(guard.is_allowed(&tool_name, &category));
+            }
+        }
+    }
 
     #[test]
     fn test_tool_guard_allow_all() {

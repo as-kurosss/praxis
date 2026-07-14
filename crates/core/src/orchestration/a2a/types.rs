@@ -217,6 +217,84 @@ pub type A2AResult<T> = std::result::Result<T, A2AError>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    impl Arbitrary for TaskState {
+        type Parameters = ();
+        type Strategy = proptest::strategy::BoxedStrategy<Self>;
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            proptest::prop_oneof![
+                Just(TaskState::Submitted),
+                Just(TaskState::Working),
+                Just(TaskState::InputRequired),
+                Just(TaskState::Completed),
+                Just(TaskState::Failed),
+                Just(TaskState::Canceled),
+            ]
+            .boxed()
+        }
+    }
+
+    impl Arbitrary for Task {
+        type Parameters = ();
+        type Strategy = proptest::strategy::BoxedStrategy<Self>;
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            (any::<String>(), any::<TaskState>())
+                .prop_map(|(id, state)| {
+                    let mut task = Task::new(id);
+                    task.state = state;
+                    task
+                })
+                .boxed()
+        }
+    }
+
+    proptest! {
+        /// TaskState никогда не паникует при вызове is_terminal().
+        #[test]
+        fn task_state_is_terminal_never_panics(state: TaskState) {
+            let _ = state.is_terminal();
+        }
+
+        /// Каждое состояние либо терминальное, либо нет (закон исключённого третьего).
+        #[test]
+        fn task_state_terminal_or_not(state: TaskState) {
+            assert!(state.is_terminal() || !state.is_terminal());
+        }
+
+        /// Task::new() всегда создаёт задачу в Submitted.
+        #[test]
+        fn task_starts_submitted(task_id: String) {
+            let task = Task::new(task_id);
+            assert_eq!(task.state, TaskState::Submitted);
+        }
+
+        /// Терминальные состояния: только Completed, Failed, Canceled.
+        #[test]
+        fn task_state_terminal_mapping(state: TaskState) {
+            match state {
+                TaskState::Completed | TaskState::Failed | TaskState::Canceled => {
+                    assert!(state.is_terminal(), "{state:?} should be terminal");
+                }
+                _ => {
+                    assert!(!state.is_terminal(), "{state:?} should not be terminal");
+                }
+            }
+        }
+
+        /// Message работает с любым содержимым текста.
+        #[test]
+        fn message_text_content(content: String) {
+            let msg = Message::text(MessageRole::User, &content);
+            if let Some(Part::Text(text)) = msg.parts.first() {
+                assert_eq!(text, &content);
+            } else {
+                panic!("Expected Text part");
+            }
+        }
+    }
 
     #[test]
     fn test_task_lifecycle() {
