@@ -19,7 +19,7 @@
 //! | `GET` | `/api/agents/{id}/sessions` | List sessions for an agent |
 //! | `DELETE` | `/api/sessions/{id}` | Delete a session |
 
-use crate::state::AppState;
+use crate::state::{AppState, McpServerConfig};
 use axum::{
     Router,
     extract::{Path, State},
@@ -28,13 +28,13 @@ use axum::{
     routing::{get, post, put},
 };
 use futures::stream::{self, StreamExt};
-use praxis_core::agent::{Agent, AgentConfig, ChatMessage, StreamChunk, ToolSet};
+use praxis_core::agent::{Agent, AgentConfig, ChatMessage, LlmClient, StreamChunk, ToolSet};
 use praxis_core::loops::{Context, CycleType, Loop, LoopId, StopCondition};
 use praxis_core::registry::{
     AgentDefinition, ProviderConfig, ProviderKind, ScrollConfig, Session, ToolBinding,
 };
 use praxis_core::tools::{CalculatorTool, CustomTool, TimeTool};
-use praxis_runtime::{AnthropicClient, GeminiClient, OpenAiClient};
+use praxis_mcp::McpRegistry;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::time::Duration;
@@ -146,6 +146,23 @@ struct ConfigResponse {
     owner_id: String,
 }
 
+// ── MCP Server request/response types ────────────────────────────────
+
+#[derive(Deserialize)]
+struct CreateMcpServerRequest {
+    name: String,
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct McpServerResponse {
+    name: String,
+    command: String,
+    args: Vec<String>,
+}
+
 // ── Build the router ──────────────────────────────────────────────────
 
 pub fn router(state: AppState) -> Router {
@@ -179,12 +196,85 @@ pub fn router(state: AppState) -> Router {
             "/api/sessions/{id}",
             get(get_session_detail).delete(delete_session),
         )
+        // Approvals
+        .route("/api/approvals/pending", get(list_pending_approvals))
+        .route("/api/approvals/{id}/approve", post(approve_approval))
+        .route("/api/approvals/{id}/deny", post(deny_approval))
+        // MCP servers
+        .route(
+            "/api/mcp-servers",
+            get(list_mcp_servers).post(create_mcp_server),
+        )
+        .route(
+            "/api/mcp-servers/{name}",
+            put(update_mcp_server).delete(delete_mcp_server),
+        )
         .with_state(state)
         // Static files (SPA)
         .fallback_service(serve_dir)
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────
+
+/// Build tools from MCP server bindings and add them to the given [`ToolSet`].
+async fn build_mcp_tools(
+    state: &AppState,
+    bindings: &[ToolBinding],
+    tools: &mut ToolSet,
+) -> Result<(), String> {
+    let mcp_configs = state
+        .mcp_servers
+        .lock()
+        .map_err(|e| format!("mcp_servers lock: {e}"))?
+        .clone();
+
+    for binding in bindings {
+        let ToolBinding::Mcp {
+            server_name,
+            tools: tool_filter,
+            enabled: true,
+        } = binding
+        else {
+            continue;
+        };
+
+        let config = mcp_configs
+            .iter()
+            .find(|c| &c.name == server_name)
+            .ok_or_else(|| format!("MCP server '{server_name}' not found"))?;
+
+        let mut registry = McpRegistry::new();
+        let args: Vec<&str> = config.args.iter().map(|s| s.as_str()).collect();
+        registry
+            .connect(&config.name, &config.command, &args)
+            .await
+            .map_err(|e| format!("MCP '{}' connect: {e}", config.name))?;
+
+        let client = registry
+            .get(&config.name)
+            .ok_or_else(|| format!("MCP '{}' not found after connect", config.name))?
+            .clone();
+
+        if tool_filter.is_empty() {
+            let adapters = praxis_mcp::McpToolAdapter::all(client)
+                .await
+                .map_err(|e| format!("MCP '{}' list tools: {e}", config.name))?;
+            for adapter in adapters {
+                tools.add(adapter);
+            }
+        } else {
+            for tool_name in tool_filter {
+                let adapter =
+                    praxis_mcp::McpToolAdapter::new(std::sync::Arc::clone(&client), tool_name)
+                        .await
+                        .map_err(|e| format!("MCP '{}' tool '{tool_name}': {e}", config.name))?;
+                tools.add(adapter);
+            }
+        }
+    }
+
+    Ok(())
+}
 
 fn build_tool_set(tools: &[ToolBinding]) -> ToolSet {
     let mut ts = ToolSet::new();
@@ -238,49 +328,41 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-/// Create an OpenAI-compatible client for Ollama or OpenAI.
-fn openai_client(provider: &ProviderConfig) -> OpenAiClient {
-    let default_url = if provider.kind == ProviderKind::Ollama {
-        "http://localhost:11434/v1"
-    } else {
-        "https://api.openai.com/v1"
-    };
-    let url = provider.api_url.as_deref().unwrap_or(default_url);
-    OpenAiClient::new(url, &provider.api_key, &provider.model)
+// ── New dispatch via ProviderFactoryRegistry ─────────────────────────
+
+/// Create an LLM client from a provider config using the factory registry.
+fn create_llm_client(
+    state: &AppState,
+    provider: &ProviderConfig,
+) -> Result<std::sync::Arc<dyn LlmClient>, praxis_core::agent::llm::LlmError> {
+    state.provider_registry.create(provider)
 }
 
-/// Dispatch agent execution to the right LLM provider.
+/// Dispatch agent execution using the provider factory registry.
 async fn run_agent_execution(
+    app_state: &AppState,
     provider: &ProviderConfig,
     config: AgentConfig,
     tool_set: ToolSet,
     ctx: Context<String>,
     state: &mut Vec<ChatMessage>,
 ) -> praxis_core::loops::LoopResult<String> {
-    match provider.kind {
-        ProviderKind::Openai | ProviderKind::Ollama | ProviderKind::Custom | ProviderKind::LmStudio => {
-            let agent = Agent::with_tools(openai_client(provider), config, tool_set);
-            agent.execute(ctx, state).await
-        }
-        ProviderKind::Anthropic => {
-            let url = provider
-                .api_url
-                .as_deref()
-                .unwrap_or("https://api.anthropic.com/v1");
-            let client = AnthropicClient::new(url, &provider.api_key, &provider.model);
+    match create_llm_client(app_state, provider) {
+        Ok(client) => {
             let agent = Agent::with_tools(client, config, tool_set);
             agent.execute(ctx, state).await
         }
-        ProviderKind::Gemini => {
-            let client = GeminiClient::new(&provider.api_key, &provider.model);
-            let agent = Agent::with_tools(client, config, tool_set);
-            agent.execute(ctx, state).await
-        }
+        Err(e) => praxis_core::loops::LoopResult::failure(
+            format!("failed to create LLM client: {e}"),
+            1,
+            0,
+        ),
     }
 }
 
-/// Dispatch streaming agent execution to the right LLM provider.
+/// Dispatch streaming agent execution using the provider factory registry.
 async fn run_agent_streaming(
+    app_state: &AppState,
     provider: &ProviderConfig,
     config: AgentConfig,
     tool_set: ToolSet,
@@ -288,25 +370,16 @@ async fn run_agent_streaming(
     state: &mut Vec<ChatMessage>,
     tx: tokio::sync::mpsc::Sender<StreamChunk>,
 ) -> praxis_core::loops::LoopResult<String> {
-    match provider.kind {
-        ProviderKind::Openai | ProviderKind::Ollama | ProviderKind::Custom | ProviderKind::LmStudio => {
-            let agent = Agent::with_tools(openai_client(provider), config, tool_set);
-            agent.execute_stream(ctx, state, tx).await
-        }
-        ProviderKind::Anthropic => {
-            let url = provider
-                .api_url
-                .as_deref()
-                .unwrap_or("https://api.anthropic.com/v1");
-            let client = AnthropicClient::new(url, &provider.api_key, &provider.model);
+    match create_llm_client(app_state, provider) {
+        Ok(client) => {
             let agent = Agent::with_tools(client, config, tool_set);
             agent.execute_stream(ctx, state, tx).await
         }
-        ProviderKind::Gemini => {
-            let client = GeminiClient::new(&provider.api_key, &provider.model);
-            let agent = Agent::with_tools(client, config, tool_set);
-            agent.execute_stream(ctx, state, tx).await
-        }
+        Err(e) => praxis_core::loops::LoopResult::failure(
+            format!("failed to create LLM client: {e}"),
+            1,
+            0,
+        ),
     }
 }
 
@@ -439,7 +512,7 @@ async fn update_agent(
         .registry
         .get_agent(&id)
         .map(|a| a.created_at)
-        .unwrap_or_else(|| praxis_core::registry::timestamp());
+        .unwrap_or_else(praxis_core::registry::timestamp);
 
     let now = praxis_core::registry::timestamp();
     let def = AgentDefinition {
@@ -477,6 +550,152 @@ async fn delete_agent(
     Ok(ApiResponse::ok(true))
 }
 
+// ── MCP Server CRUD ──────────────────────────────────────────────────
+
+async fn list_mcp_servers(
+    State(state): State<AppState>,
+) -> Json<ApiResponse<Vec<McpServerResponse>>> {
+    let servers = state
+        .mcp_servers
+        .lock()
+        .map(|s| {
+            s.iter()
+                .map(|c| McpServerResponse {
+                    name: c.name.clone(),
+                    command: c.command.clone(),
+                    args: c.args.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    ApiResponse::ok(servers)
+}
+
+async fn create_mcp_server(
+    State(state): State<AppState>,
+    axum::Json(body): axum::Json<CreateMcpServerRequest>,
+) -> Result<Json<ApiResponse<McpServerResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let config = McpServerConfig {
+        name: body.name,
+        command: body.command,
+        args: body.args,
+    };
+    let resp = McpServerResponse {
+        name: config.name.clone(),
+        command: config.command.clone(),
+        args: config.args.clone(),
+    };
+    state
+        .mcp_servers
+        .lock()
+        .map_err(|e| ApiResponse::err(format!("mcp_servers lock: {e}")))?
+        .push(config);
+    Ok(ApiResponse::ok(resp))
+}
+
+async fn update_mcp_server(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    axum::Json(body): axum::Json<CreateMcpServerRequest>,
+) -> Result<Json<ApiResponse<McpServerResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let mut servers = state
+        .mcp_servers
+        .lock()
+        .map_err(|e| ApiResponse::err(format!("mcp_servers lock: {e}")))?;
+    let existing = servers
+        .iter_mut()
+        .find(|c| c.name == name)
+        .ok_or_else(|| ApiResponse::err(format!("MCP server '{name}' not found")))?;
+    existing.command = body.command;
+    existing.args = body.args;
+    Ok(ApiResponse::ok(McpServerResponse {
+        name: existing.name.clone(),
+        command: existing.command.clone(),
+        args: existing.args.clone(),
+    }))
+}
+
+async fn delete_mcp_server(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<ApiResponse<bool>>, (StatusCode, Json<ApiResponse<bool>>)> {
+    let mut servers = state
+        .mcp_servers
+        .lock()
+        .map_err(|e| ApiResponse::err(format!("mcp_servers lock: {e}")))?;
+    let pos = servers
+        .iter()
+        .position(|c| c.name == name)
+        .ok_or_else(|| ApiResponse::err(format!("MCP server '{name}' not found")))?;
+    servers.remove(pos);
+    Ok(ApiResponse::ok(true))
+}
+
+// ── Approval Endpoints ───────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct ApprovalResponse {
+    id: String,
+    session_id: Option<String>,
+    tool_name: String,
+    tool_args: serde_json::Value,
+    reason: String,
+    status: String,
+    created_at: String,
+}
+
+impl From<praxis_core::sandbox::ApprovalRequest> for ApprovalResponse {
+    fn from(r: praxis_core::sandbox::ApprovalRequest) -> Self {
+        Self {
+            id: r.id,
+            session_id: r.session_id,
+            tool_name: r.tool_name,
+            tool_args: r.tool_args,
+            reason: r.reason,
+            status: format!("{:?}", r.status),
+            created_at: r.created_at,
+        }
+    }
+}
+
+async fn list_pending_approvals(
+    State(state): State<AppState>,
+) -> Json<ApiResponse<Vec<ApprovalResponse>>> {
+    let list: Vec<_> = state
+        .approvals
+        .list_by_status(praxis_core::sandbox::ApprovalStatus::Pending)
+        .into_iter()
+        .map(ApprovalResponse::from)
+        .collect();
+    ApiResponse::ok(list)
+}
+
+async fn approve_approval(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<ApiResponse<bool>>, (StatusCode, Json<ApiResponse<()>>)> {
+    if state.approvals.approve(&id) {
+        Ok(ApiResponse::ok(true))
+    } else {
+        Err(ApiResponse::err(format!(
+            "Approval '{id}' not found or already resolved"
+        )))
+    }
+}
+
+async fn deny_approval(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<ApiResponse<bool>>, (StatusCode, Json<ApiResponse<()>>)> {
+    if state.approvals.deny(&id) {
+        Ok(ApiResponse::ok(true))
+    } else {
+        Err(ApiResponse::err(format!(
+            "Approval '{id}' not found or already resolved"
+        )))
+    }
+}
+
 // ── Chat ─────────────────────────────────────────────────────────────
 
 async fn chat_handler(
@@ -496,8 +715,9 @@ async fn chat_handler(
         .get_provider(&def.provider_id)
         .ok_or_else(|| ApiResponse::err(format!("Provider '{}' not found", def.provider_id)))?;
 
-    // 3. Build tool set
-    let tool_set = build_tool_set(&def.tools);
+    // 3. Build tool set (built-in + MCP)
+    let mut tool_set = build_tool_set(&def.tools);
+    let _ = build_mcp_tools(&state, &def.tools, &mut tool_set).await;
 
     // 4. Build agent config
     let config = AgentConfig {
@@ -529,8 +749,16 @@ async fn chat_handler(
         .map(|s| s.messages)
         .unwrap_or_default();
 
-    // 8. Execute with provider dispatch
-    let result = run_agent_execution(&provider, config, tool_set, ctx, &mut state_messages).await;
+    // 8. Execute with provider factory registry
+    let result = run_agent_execution(
+        &state,
+        &provider,
+        config,
+        tool_set,
+        ctx,
+        &mut state_messages,
+    )
+    .await;
 
     // 9. Save session
     let mut session = state
@@ -572,7 +800,8 @@ async fn chat_stream_handler(
         .get_provider(&def.provider_id)
         .ok_or_else(|| ApiResponse::err(format!("Provider '{}' not found", def.provider_id)))?;
 
-    let tool_set = build_tool_set(&def.tools);
+    let mut tool_set = build_tool_set(&def.tools);
+    let _ = build_mcp_tools(&state, &def.tools, &mut tool_set).await;
 
     let config = AgentConfig {
         model: provider.model.clone(),
@@ -605,10 +834,12 @@ async fn chat_stream_handler(
     let agent_id_clone = agent_id.clone();
     let session_id_for_spawn = session_id.clone();
     let session_id_for_event = session_id.clone();
+    let provider_for_spawn = provider.clone();
 
     tokio::spawn(async move {
         let _result = run_agent_streaming(
-            &provider,
+            &state_clone,
+            &provider_for_spawn,
             config,
             tool_set,
             ctx,

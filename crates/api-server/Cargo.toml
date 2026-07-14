@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 praxis-core = { path = "../core" }
 praxis-runtime = { path = "../runtime" }
+praxis-mcp = { path = "../mcp" }
 axum.workspace = true
 tower.workspace = true
 tower-http.workspace = true

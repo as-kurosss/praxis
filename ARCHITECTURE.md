@@ -28,7 +28,8 @@ principled execution model built on four primitive cycles — **Turn**, **Goal**
 praxis/
 ├── Cargo.toml                  # Workspace manifest
 ├── crates/
-│   ├── core/                   # Domain types, Loop Engine, Agent, Tools
+│   ├── core/                   # Domain types, Loop Engine, Agent, Tools,
+│   │                           # A2A Protocol, Plugin Architecture, Governance
 │   ├── runtime/                # LLM client implementations (OpenAI, Anthropic, Gemini)
 │   ├── mcp/                    # Model Context Protocol client (JSON-RPC over stdio)
 │   ├── cli/                    # Binary entrypoint (CLI agent)
@@ -119,7 +120,59 @@ pub trait Tool: Send + Sync {
 
 Built-in tools: `CalculatorTool`, `TimeTool`, `ShellTool`, `EchoTool`.
 
-### 7. MCP Integration
+### 7. A2A Protocol (Agent-to-Agent)
+
+The A2A module implements the [Google A2A](https://github.com/google/A2A) inter-agent
+communication protocol. It is gated behind the `a2a` feature (in default features).
+
+**Types:**
+- `AgentCard` — agent metadata (name, description, capabilities, auth)
+- `Task` / `TaskId` / `TaskState` — task lifecycle (Submitted → Working → Completed/Failed/Canceled)
+- `A2AError` / `A2AResult` — typed error handling
+
+**Features:**
+- Server: Axum-based HTTP server with agent card discovery (`/.well-known/agent-card`),
+  task CRUD (`/tasks`, `/tasks/{id}`, `/tasks/{id}/cancel`)
+- Client: Async HTTP client with `reqwest`
+- Transport: `A2ATransport` bridges A2A messages to the internal ACP (`AcpTransport` trait)
+- SSE streaming (requires `axum` feature `ss`)
+
+### 8. Plugin Architecture
+
+The Plugin module allows extending agent capabilities via WASM-based plugins.
+Gated behind the `plugin-wasm` feature.
+
+**Components:**
+- `PluginManifest` — TOML/JSON manifest with name, version, author, and tool declarations
+- `PluginRegistry` — centralized registry with register, unregister, get, and tool lookup
+- `PluginLoader` — filesystem scanner that discovers manifests in `.agents/plugins/`
+- `PluginHost` — WASM sandbox based on `wasmtime` (v28, cranelift backend) with
+  `HostAccessPolicy` for fine-grained capability control
+
+**Lifecycle:**
+1. Plugin manifests are discovered by `PluginLoader` from disk
+2. Manifest is parsed and registered in `PluginRegistry`
+3. WASM bytecode is compiled by `PluginHost::compile()` into a `CompiledPlugin`
+4. Functions are invoked via `PluginHost::call_function()` with policy enforcement
+
+### 9. Governance Matrix
+
+The Governance module provides multi-layer access control for every agent:
+
+**Layers:**
+- **AgentGovernance** — per-agent Allow/Deny/Ask matrix for tool categories
+  (Shell, FileRead, FileWrite, Network, Generic). Integrates with `AccessPolicyEvaluator`.
+- **GovernanceRegistry** — global registry of agent matrices with fallback to a default policy
+- **ToolGuard** — tool-level filtering in three modes:
+  - `AllowList` — only explicitly listed tools are permitted
+  - `BlockList` — only explicitly listed tools are blocked
+  - `AllowAll` — all tools permitted (with optional category blocking)
+- **FileGuard** — path-level filesystem access control:
+  - Restricted mode: only paths within allowed directories
+  - Built-in blocked patterns: `.ssh`, `.git`, `etc/passwd`, `etc/shadow`
+  - Custom blocked patterns via `add_blocked_pattern()`
+
+### 10. MCP Integration
 
 The `mcp` crate implements the [Model Context Protocol](https://modelcontextprotocol.io)
 client for connecting to external tool servers:
@@ -129,7 +182,7 @@ client for connecting to external tool servers:
 - Tool invocation (call tools via MCP)
 - McpRegistry manages multiple MCP servers
 
-### 8. Orchestration Patterns
+### 11. Orchestration Patterns
 
 High-level patterns for coordinating multiple agents:
 
@@ -140,7 +193,7 @@ High-level patterns for coordinating multiple agents:
 | **Broadcast** | Same input sent to all agents concurrently |
 | **Router** | Select agent based on routing function |
 
-### 9. LLM Providers
+### 12. LLM Providers
 
 Multiple provider implementations through the `LlmClient` trait:
 
@@ -148,7 +201,7 @@ Multiple provider implementations through the `LlmClient` trait:
 - **Anthropic** (`AnthropicClient`) — Claude models
 - **Gemini** (`GeminiClient`) — Google Gemini models
 
-### 10. State Persistence
+### 13. State Persistence
 
 The `persistence` module handles serialization/deserialization:
 
@@ -157,7 +210,7 @@ The `persistence` module handles serialization/deserialization:
 - `save_snapshot` / `load_snapshot` for graph snapshots
 - All key types implement `Serialize` + `Deserialize`
 
-### 11. API Server
+### 14. API Server
 
 The `api-server` crate exposes HTTP endpoints:
 
@@ -170,7 +223,7 @@ The `api-server` crate exposes HTTP endpoints:
 | `POST /agents` | Create a new agent |
 | `GET /agents/{id}/stream` | SSE stream agent output |
 
-### 12. Error Handling
+### 15. Error Handling
 
 - `Result<T, E>` pattern throughout
 - `thiserror` for typed errors in libraries
@@ -206,4 +259,4 @@ Context ──► Graph ──► Node (Loop)
 - **Integration tests** in `tests/` directories
 - **Mock LLM clients** via trait implementations
 - **Wiremock** for HTTP-based providers
-|- **323+ tests** across core, runtime, and API server
+|- **324+ tests** across core, runtime, and API server

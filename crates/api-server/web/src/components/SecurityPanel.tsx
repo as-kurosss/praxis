@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import * as api from '../api'
+import type { ApprovalRequest } from '../types'
 interface SecurityPolicy {
   id: string;
   name: string;
@@ -16,6 +17,8 @@ export function SecurityPanel({ addToast }: Props) {
   const [policies, setPolicies] = useState<SecurityPolicy[]>([])
   const [loading, setLoading] = useState(true)
   const [expanded, setExpanded] = useState<string | null>(null)
+  const [approvals, setApprovals] = useState<ApprovalRequest[]>([])
+  const [approvalsLoading, setApprovalsLoading] = useState(false)
 
   const load = async () => {
     setLoading(true)
@@ -24,7 +27,30 @@ export function SecurityPanel({ addToast }: Props) {
     finally { setLoading(false) }
   }
 
-  useEffect(() => { load() }, [])
+  const loadApprovals = useCallback(async () => {
+    setApprovalsLoading(true)
+    try { setApprovals(await api.listPendingApprovals()) }
+    catch { /* ignore */ }
+    finally { setApprovalsLoading(false) }
+  }, [])
+
+  useEffect(() => { load(); loadApprovals() }, [loadApprovals])
+
+  const handleApprove = async (id: string) => {
+    try {
+      await api.approveApproval(id)
+      addToast('Approval approved', 'success')
+      loadApprovals()
+    } catch (e: any) { addToast(e.message) }
+  }
+
+  const handleDeny = async (id: string) => {
+    try {
+      await api.denyApproval(id)
+      addToast('Approval denied', 'success')
+      loadApprovals()
+    } catch (e: any) { addToast(e.message) }
+  }
 
   const actionColor = (action: string) => {
     switch (action) {
@@ -39,7 +65,39 @@ export function SecurityPanel({ addToast }: Props) {
 
   return (
     <div>
-      <h3 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--accent)' }}>
+      {/* ── Pending Approvals ── */}
+      <h3 style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: '#d97706' }}>
+        Pending Approvals {approvals.length > 0 && `(${approvals.length})`}
+      </h3>
+      {approvals.length === 0 ? (
+        <div className="empty-state" style={{ fontSize: 12 }}>
+          <p>{approvalsLoading ? 'Loading...' : 'No pending approvals.'}</p>
+        </div>
+      ) : (
+        approvals.map(a => (
+          <div key={a.id} className="card" style={{ padding: '8px 10px' }}>
+            <div className="flex-between" style={{ marginBottom: 4 }}>
+              <strong style={{ fontSize: 13 }}>{a.tool_name}</strong>
+              <span style={{ fontSize: 10, color: 'var(--text2)' }}>{a.created_at}</span>
+            </div>
+            <p style={{ fontSize: 11, marginBottom: 6 }}>{a.reason}</p>
+            {a.tool_args != null && typeof a.tool_args === 'object' && (
+              <pre style={{
+                fontSize: 10, background: 'var(--bg)', padding: '4px 6px',
+                borderRadius: 'var(--radius-sm)', overflow: 'auto', maxHeight: 80,
+                marginBottom: 8,
+              }}>{JSON.stringify(a.tool_args, null, 2)}</pre>
+            )}
+            <div style={{ display: 'flex', gap: 4 }}>
+              <button className="btn btn-primary btn-sm" onClick={() => handleApprove(a.id)}>Approve</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => handleDeny(a.id)} style={{ color: 'var(--red)' }}>Deny</button>
+            </div>
+          </div>
+        ))
+      )}
+
+      {/* ── Security Policies ── */}
+      <h3 style={{ fontSize: 13, fontWeight: 600, marginTop: 16, marginBottom: 12, color: 'var(--accent)' }}>
         Security Policies
       </h3>
 

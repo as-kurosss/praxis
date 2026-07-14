@@ -37,12 +37,12 @@ impl AgentRegistry {
         let path = path.as_ref().to_path_buf();
 
         let file = if path.exists() {
-            let content = std::fs::read_to_string(&path).map_err(|e| crate::error::Error::Io(e))?;
-            serde_json::from_str(&content).map_err(|e| crate::error::Error::Json(e))?
+            let content = std::fs::read_to_string(&path).map_err(crate::error::Error::Io)?;
+            serde_json::from_str(&content).map_err(crate::error::Error::Json)?
         } else {
             // Create parent directories if needed.
             if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| crate::error::Error::Io(e))?;
+                std::fs::create_dir_all(parent).map_err(crate::error::Error::Io)?;
             }
             let file = RegistryFile {
                 version: 1,
@@ -50,9 +50,8 @@ impl AgentRegistry {
                 agents: HashMap::new(),
             };
             // Write the empty file.
-            let json =
-                serde_json::to_string_pretty(&file).map_err(|e| crate::error::Error::Json(e))?;
-            std::fs::write(&path, &json).map_err(|e| crate::error::Error::Io(e))?;
+            let json = serde_json::to_string_pretty(&file).map_err(crate::error::Error::Json)?;
+            std::fs::write(&path, &json).map_err(crate::error::Error::Io)?;
             file
         };
 
@@ -65,9 +64,8 @@ impl AgentRegistry {
     /// Persist the current state to disk.
     fn save(&self) -> Result<()> {
         let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let json =
-            serde_json::to_string_pretty(&*guard).map_err(|e| crate::error::Error::Json(e))?;
-        std::fs::write(&self.path, &json).map_err(|e| crate::error::Error::Io(e))?;
+        let json = serde_json::to_string_pretty(&*guard).map_err(crate::error::Error::Json)?;
+        std::fs::write(&self.path, &json).map_err(crate::error::Error::Io)?;
         Ok(())
     }
 

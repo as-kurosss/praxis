@@ -16,6 +16,9 @@ and **Proactive** — that compose into complex agent workflows.
 - **Sub-agent Spawning** — agents can spawn and communicate with child agents with isolated state
 - **Multi-Agent Orchestration** — Supervisor, RoundRobin, Broadcast, Router patterns (all implement `Loop`)
 - **Agent Communication Protocol (ACP)** — typed message passing between agents with TTL, routing, and pluggable transports (in-memory, TCP, stdio)
+- **A2A Protocol (Agent-to-Agent)** — Google A2A-compatible inter-agent communication: Agent Card discovery, task lifecycle (create/get/cancel), SSE streaming, with a transport bridge to ACP
+- **Plugin Architecture** — WASM-based plugin system with TOML/JSON manifests, sandboxed execution via `wasmtime`, and policy-based host access control
+- **Governance Matrix** — per-agent resource access control: Allow/Deny/Ask matrix by tool category, ToolGuard (AllowList/BlockList), and FileGuard (restricted paths with sensitive pattern blocking)
 - **Sandbox & Governance** — policy enforcement (shell blocklists, file path restrictions, network allow/deny), sandboxed execution via `DirectSandbox` with async trait API
 - **Scheduler** — cron-like task scheduling engine with Interval/Cron/Once/Recurring schedules and persistent JSON-backed task definitions
 - **Memory System** — multi-layer memory: `WorkingMemory` with scroll strategies (Truncate, SlidingWindow, Summarize), `EpisodicMemory` with keyword-indexed IDF-weighted recall, `DistilledMemory` with periodic summarization
@@ -30,7 +33,8 @@ and **Proactive** — that compose into complex agent workflows.
 ```
 praxis/
 ├── crates/
-│   ├── core/         # Domain types, Loop Engine, Agent, Tools, Memory, Sandbox, Scheduler, Orchestration, ACP
+│   ├── core/         # Domain types, Loop Engine, Agent, Tools, Memory, Sandbox,
+│   │                 # Scheduler, Orchestration, ACP, A2A, Plugin, Governance
 │   ├── runtime/      # LLM client implementations (OpenAI, Anthropic, Gemini)
 │   ├── mcp/          # Model Context Protocol client (stdio transport)
 │   ├── cli/          # Binary entrypoint

@@ -67,12 +67,11 @@ impl SessionStore {
         let rd = std::fs::read_dir(&sessions_dir)?;
         for entry in rd.flatten() {
             let path = entry.path();
-            if path.extension().map_or(false, |e| e == "json") {
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    if let Ok(session) = serde_json::from_str::<Session>(&content) {
-                        cache.insert(session.id.clone(), session);
-                    }
-                }
+            if path.extension().is_some_and(|e| e == "json")
+                && let Ok(content) = std::fs::read_to_string(&path)
+                && let Ok(session) = serde_json::from_str::<Session>(&content)
+            {
+                cache.insert(session.id.clone(), session);
             }
         }
 

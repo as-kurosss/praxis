@@ -51,7 +51,7 @@ impl McpRegistry {
     /// Tools with duplicate names will be prefixed with `{server_name}_`.
     pub async fn collect_tools(&self) -> Result<ToolSet, McpError> {
         let mut tools = ToolSet::new();
-        for (_server_name, client) in &self.clients {
+        for client in self.clients.values() {
             let adapters = McpToolAdapter::all(Arc::clone(client)).await?;
             for adapter in adapters {
                 tools.add(adapter);

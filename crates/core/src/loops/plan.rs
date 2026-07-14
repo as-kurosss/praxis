@@ -132,21 +132,12 @@ impl PlanLoop {
 }
 
 /// State for the Plan Loop.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PlanState {
     /// The generated plan.
     pub plan: Option<Plan>,
     /// Current step being executed (0-based index).
     pub current_step: usize,
-}
-
-impl Default for PlanState {
-    fn default() -> Self {
-        Self {
-            plan: None,
-            current_step: 0,
-        }
-    }
 }
 
 #[async_trait::async_trait]

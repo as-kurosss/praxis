@@ -6,6 +6,7 @@
 
 use super::llm::{ChatMessage, ChatRequest, LlmClient, StreamChunk, ToolCall};
 use super::tool::ToolSet;
+use crate::context::{MemoryExtractor, SessionScroll};
 use crate::loops::{Context, Loop, LoopResult};
 use crate::memory::EpisodicMemory;
 use serde::{Deserialize, Serialize};
@@ -67,6 +68,8 @@ pub struct Agent<L: LlmClient> {
     config: AgentConfig,
     tools: ToolSet,
     episodic_memory: Option<Mutex<EpisodicMemory>>,
+    session_scroll: Option<SessionScroll>,
+    memory_extractor: Option<MemoryExtractor>,
     turn_counter: AtomicU64,
 }
 
@@ -78,6 +81,8 @@ impl<L: LlmClient> Agent<L> {
             config,
             tools: ToolSet::new(),
             episodic_memory: None,
+            session_scroll: None,
+            memory_extractor: None,
             turn_counter: AtomicU64::new(0),
         }
     }
@@ -89,8 +94,22 @@ impl<L: LlmClient> Agent<L> {
             config,
             tools,
             episodic_memory: None,
+            session_scroll: None,
+            memory_extractor: None,
             turn_counter: AtomicU64::new(0),
         }
+    }
+
+    /// Attach a `MemoryExtractor` for post-turn fact extraction.
+    pub fn with_memory_extractor(mut self, extractor: MemoryExtractor) -> Self {
+        self.memory_extractor = Some(extractor);
+        self
+    }
+
+    /// Attach a `SessionScroll` for persistent turn storage and recall.
+    pub fn with_session_scroll(mut self, scroll: SessionScroll) -> Self {
+        self.session_scroll = Some(scroll);
+        self
     }
 
     /// Attach an episodic memory to this agent for full history recording.
@@ -161,6 +180,15 @@ impl<L: LlmClient> Agent<L> {
 
         // Add user message to conversation state
         let input = ctx.input.clone();
+
+        // Load persistent history into an empty state (first call of a session)
+        if let Some(ref scroll) = self.session_scroll
+            && let Err(e) = scroll.load_into_state(state)
+        {
+            // Non-fatal: log and continue with what we have
+            eprintln!("[session_scroll] load_into_state: {e}");
+        }
+
         // Skip if the last message is already the same user input
         // (avoids duplication when a streaming attempt and a fallback POST
         // race on the same session — both call execute_impl, but only one
@@ -171,6 +199,14 @@ impl<L: LlmClient> Agent<L> {
             .unwrap_or(false);
         if !is_dup {
             state.push(ChatMessage::user(ctx.input));
+
+            // Persist the user turn
+            if let Some(ref scroll) = self.session_scroll {
+                let tokens = input.len() as i64 / 4;
+                if let Err(e) = scroll.save_turn("user", Some(&input), tokens) {
+                    eprintln!("[session_scroll] save user turn: {e}");
+                }
+            }
         }
 
         // Apply scroll strategy and record evicted turns in episodic memory
@@ -179,17 +215,17 @@ impl<L: LlmClient> Agent<L> {
             strategy.apply(state);
             if before.len() > state.len() {
                 let counter = self.turn_counter.fetch_add(1, Ordering::SeqCst);
-                if let Some(ref episodic_mutex) = self.episodic_memory {
-                    if let Ok(mut episodic) = episodic_mutex.lock() {
-                        let turn_id = format!("turn_{}", counter + 1);
-                        crate::memory::record_evicted_turn(
-                            &mut episodic,
-                            &turn_id,
-                            &input,
-                            &before,
-                            state,
-                        );
-                    }
+                if let Some(ref episodic_mutex) = self.episodic_memory
+                    && let Ok(mut episodic) = episodic_mutex.lock()
+                {
+                    let turn_id = format!("turn_{}", counter + 1);
+                    crate::memory::record_evicted_turn(
+                        &mut episodic,
+                        &turn_id,
+                        &input,
+                        &before,
+                        state,
+                    );
                 }
             }
         }
@@ -216,6 +252,22 @@ impl<L: LlmClient> Agent<L> {
             // they can appear from partial saves and cause 400 errors on some providers.
             let mut messages = Vec::with_capacity(state.len() + 1);
             messages.push(ChatMessage::system(&self.config.system_prompt));
+
+            // Inject relevant facts from long-term memory
+            if let Some(ref scroll) = self.session_scroll
+                && let Ok(facts) = scroll.get_relevant_facts(&input, 5)
+                && !facts.is_empty()
+            {
+                let facts_text: String = facts
+                    .iter()
+                    .map(|f| format!("- {} / {}: {}", f.entity, f.attribute, f.value))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                messages.push(ChatMessage::system(format!(
+                    "Relevant facts from past conversations:\n{facts_text}"
+                )));
+            }
+
             messages.extend(
                 state
                     .iter()
@@ -311,6 +363,14 @@ impl<L: LlmClient> Agent<L> {
                             }
                             continue;
                         } else {
+                            if let Some(ref scroll) = self.session_scroll {
+                                let tokens = fallback_text.len() as i64 / 4;
+                                let _ = scroll.save_turn("assistant", Some(&fallback_text), tokens);
+                            }
+                            // Memory extraction
+                            if let Some(ref extractor) = self.memory_extractor {
+                                let _ = extractor.extract_from_turn(&input, &fallback_text);
+                            }
                             return LoopResult::success(
                                 fallback_text,
                                 iteration,
@@ -481,6 +541,14 @@ impl<L: LlmClient> Agent<L> {
                 // Continue — LLM will see tool results next iteration
             } else {
                 // Token already emitted during streaming; non-streaming also emitted above
+                if let Some(ref scroll) = self.session_scroll {
+                    let tokens = response_text.len() as i64 / 4;
+                    let _ = scroll.save_turn("assistant", Some(&response_text), tokens);
+                }
+                // Memory extraction
+                if let Some(ref extractor) = self.memory_extractor {
+                    let _ = extractor.extract_from_turn(&input, &response_text);
+                }
                 return LoopResult::success(
                     response_text,
                     iteration,

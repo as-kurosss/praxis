@@ -54,7 +54,7 @@ impl Schedule {
                 let elapsed_secs = elapsed.as_secs();
                 let interval_secs = interval.as_secs();
                 if interval_secs > 0 {
-                    let intervals_passed = elapsed_secs / interval_secs;
+                    let intervals_passed = elapsed_secs.checked_div(interval_secs)?;
                     let next = intervals_passed.checked_add(1)?;
                     let dur = Duration::from_secs(interval_secs.checked_mul(next)?);
                     start.checked_add(dur)
@@ -62,7 +62,7 @@ impl Schedule {
                     // Sub-second interval — use nanos (values are small so u64 is safe)
                     let elapsed_ns: u64 = elapsed.as_nanos().try_into().ok()?;
                     let interval_ns: u64 = interval.as_nanos().try_into().ok()?;
-                    let intervals_passed = elapsed_ns / interval_ns;
+                    let intervals_passed = elapsed_ns.checked_div(interval_ns)?;
                     let next = intervals_passed.checked_add(1)?;
                     let dur = Duration::from_nanos(interval_ns.checked_mul(next)?);
                     start.checked_add(dur)

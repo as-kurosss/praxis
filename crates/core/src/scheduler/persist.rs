@@ -86,6 +86,10 @@ impl<L: Loop + Send + 'static> TaskFactory<L> {
     }
 }
 
+/// Type-erased callback for recreating stored tasks from their defs.
+type TaskFactoryFn =
+    Arc<dyn Fn(StoredTaskDef) -> Result<Box<dyn AnyTask>, PersistError> + Send + Sync>;
+
 /// A scheduler with persistent task definitions saved to a JSON file.
 ///
 /// Tasks are defined by type name + schedule. On load, registered
@@ -96,10 +100,7 @@ pub struct PersistentScheduler {
     /// Path to the JSON file storing task definitions.
     store: PathBuf,
     /// Registered factories keyed by task type name.
-    factories: Vec<(
-        String,
-        Arc<dyn Fn(StoredTaskDef) -> Result<Box<dyn AnyTask>, PersistError> + Send + Sync>,
-    )>,
+    factories: Vec<(String, TaskFactoryFn)>,
     /// In-memory task definitions, synced to disk on [`save`](PersistentScheduler::save).
     stored_defs: Vec<StoredTaskDef>,
 }

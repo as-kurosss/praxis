@@ -113,6 +113,22 @@ export interface Notification {
   timestamp: string
 }
 
+export interface McpServerConfig {
+  name: string;
+  command: string;
+  args: string[];
+}
+
+export interface ApprovalRequest {
+  id: string;
+  session_id: string | null;
+  tool_name: string;
+  tool_args: unknown;
+  reason: string;
+  status: string;
+  created_at: string;
+}
+
 export const BUILTIN_TOOLS = [
   { name: 'calculator', description: 'Performs arithmetic calculations' },
   { name: 'time', description: 'Gets the current time' },

@@ -54,8 +54,7 @@ where
             let agent = Arc::clone(agent);
             handles.push(tokio::spawn(async move {
                 let mut state = S::default();
-                let result = agent.execute(ctx, &mut state).await;
-                result
+                agent.execute(ctx, &mut state).await
             }));
         }
 

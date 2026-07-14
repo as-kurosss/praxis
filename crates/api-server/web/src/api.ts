@@ -2,6 +2,7 @@ import type {
   ApiResponse, ProviderConfig, AgentDefinition, AgentSummary,
   ChatResponse, SessionSummary, Session, Config, Notification,
   TraceSummary, TraceDetail, MetricPoint, DashboardStats,
+  ApprovalRequest, McpServerConfig,
 } from './types';
 
 class ApiError extends Error {
@@ -155,4 +156,36 @@ export async function updateSettings(body: unknown): Promise<unknown> {
 
 export async function updateSessionTitle(id: string, title: string): Promise<Session> {
   return request(`/api/sessions/${id}/title`, { method: 'PUT', body: JSON.stringify({ title }) });
+}
+
+// ── MCP Servers ──
+
+export async function listMcpServers(): Promise<McpServerConfig[]> {
+  return request('/api/mcp-servers');
+}
+
+export async function createMcpServer(body: Partial<McpServerConfig>): Promise<McpServerConfig> {
+  return request('/api/mcp-servers', { method: 'POST', body: JSON.stringify(body) });
+}
+
+export async function updateMcpServer(name: string, body: Partial<McpServerConfig>): Promise<McpServerConfig> {
+  return request(`/api/mcp-servers/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(body) });
+}
+
+export async function deleteMcpServer(name: string): Promise<boolean> {
+  return request(`/api/mcp-servers/${encodeURIComponent(name)}`, { method: 'DELETE' });
+}
+
+// ── Approvals ──
+
+export async function listPendingApprovals(): Promise<ApprovalRequest[]> {
+  return request('/api/approvals/pending');
+}
+
+export async function approveApproval(id: string): Promise<boolean> {
+  return request(`/api/approvals/${id}/approve`, { method: 'POST' });
+}
+
+export async function denyApproval(id: string): Promise<boolean> {
+  return request(`/api/approvals/${id}/deny`, { method: 'POST' });
 }

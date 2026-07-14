@@ -1,7 +1,10 @@
+use crate::agent::llm::{LlmClient, LlmError};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Supported LLM provider kinds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderKind {
     /// OpenAI-compatible API (also works with Ollama, vLLM, OpenRouter, etc.)
@@ -95,5 +98,68 @@ impl ProviderConfig {
     pub fn with_notes(mut self, notes: impl Into<String>) -> Self {
         self.notes = Some(notes.into());
         self
+    }
+}
+
+// ── ProviderFactory trait ───────────────────────────────────────────────
+
+/// Dynamically creates an [`LlmClient`] from a [`ProviderConfig`].
+///
+/// Each provider kind registers a factory that knows how to build
+/// the correct client implementation.
+#[async_trait::async_trait]
+pub trait ProviderFactory: Send + Sync {
+    /// Create an LLM client from the given configuration.
+    fn create(&self, config: &ProviderConfig) -> Result<Arc<dyn LlmClient>, LlmError>;
+}
+
+/// Registry of provider factories.
+///
+/// Maps [`ProviderKind`] to a factory that can create the appropriate
+/// [`LlmClient`].  Factories are registered at startup.
+#[derive(Default)]
+pub struct ProviderFactoryRegistry {
+    factories: HashMap<ProviderKind, Box<dyn ProviderFactory>>,
+}
+
+impl ProviderFactoryRegistry {
+    /// Create a new empty registry.
+    pub fn new() -> Self {
+        Self {
+            factories: HashMap::new(),
+        }
+    }
+
+    /// Register a factory for a provider kind.
+    pub fn register(&mut self, kind: ProviderKind, factory: Box<dyn ProviderFactory>) {
+        self.factories.insert(kind, factory);
+    }
+
+    /// Create an LLM client for the given provider configuration.
+    ///
+    /// Returns an error if no factory is registered for the provider kind.
+    pub fn create(&self, config: &ProviderConfig) -> Result<Arc<dyn LlmClient>, LlmError> {
+        let factory = self.factories.get(&config.kind).ok_or_else(|| {
+            LlmError::Request(format!(
+                "no factory registered for provider kind {:?}",
+                config.kind
+            ))
+        })?;
+        factory.create(config)
+    }
+
+    /// Returns true if a factory is registered for the given kind.
+    pub fn supports(&self, kind: &ProviderKind) -> bool {
+        self.factories.contains_key(kind)
+    }
+
+    /// Number of registered factories.
+    pub fn len(&self) -> usize {
+        self.factories.len()
+    }
+
+    /// Whether the registry is empty.
+    pub fn is_empty(&self) -> bool {
+        self.factories.is_empty()
     }
 }

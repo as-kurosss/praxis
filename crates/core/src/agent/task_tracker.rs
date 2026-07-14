@@ -212,7 +212,7 @@ impl TaskTracker {
     pub async fn spawn_background<S>(
         &self,
         task_id: TaskId,
-        agent: impl Loop<Context = String, State = S, Output = String> + Send + 'static,
+        agent: impl Loop<Context = String, State = S, Output = String> + 'static,
         ctx: Context<String>,
         state: S,
     ) -> TaskHandle

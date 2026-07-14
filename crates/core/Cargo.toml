@@ -5,10 +5,12 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-default = []
+default = ["a2a"]
 pdf = ["dep:lopdf"]
 docx = ["dep:docx-rs"]
 all-docs = ["pdf", "docx"]
+a2a = ["axum", "reqwest", "futures", "async-stream"]
+plugin-wasm = ["dep:wasmtime"]
 
 [dependencies]
 serde.workspace = true
@@ -22,12 +24,25 @@ chrono = "0.4"
 lopdf = { version = "0.34", optional = true }
 docx-rs = { version = "0.4", optional = true }
 regex = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+axum = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+async-stream = { version = "0.3", optional = true }
+tokio-stream = "0.1"
+tokio-util = "0.7"
+toml = "0.8"
+wasmtime = { version = "28", default-features = false, features = ["cranelift"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
     "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Pipes",
+    "Win32_System_Console",
 ] }
 
 [dev-dependencies]
 tempfile = "3"
+wiremock = { workspace = true }

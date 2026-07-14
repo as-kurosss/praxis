@@ -90,10 +90,10 @@ impl EpisodicMemory {
     /// If the store is at capacity the oldest entry is evicted first.
     pub fn record(&mut self, entry: EpisodicEntry) {
         // Evict oldest if at capacity
-        if self.store.len() >= self.max_entries {
-            if let Some(oldest_id) = self.order.pop_front() {
-                self.remove_entry(&oldest_id);
-            }
+        if self.store.len() >= self.max_entries
+            && let Some(oldest_id) = self.order.pop_front()
+        {
+            self.remove_entry(&oldest_id);
         }
 
         let turn_id = entry.turn_id.clone();
@@ -191,7 +191,6 @@ impl EpisodicMemory {
     }
 
     /// Iterate over all entries (oldest first).
-    #[must_use]
     pub fn iter(&self) -> impl Iterator<Item = &EpisodicEntry> {
         self.order.iter().filter_map(move |id| self.store.get(id))
     }
@@ -254,13 +253,13 @@ impl EpisodicEntry {
         let mut tool_calls = Vec::new();
 
         for msg in messages {
-            if let Some(content) = &msg.content {
-                if msg.role == crate::agent::llm::Role::Assistant {
-                    if !output.is_empty() {
-                        output.push('\n');
-                    }
-                    output.push_str(content);
+            if let Some(content) = &msg.content
+                && msg.role == crate::agent::llm::Role::Assistant
+            {
+                if !output.is_empty() {
+                    output.push('\n');
                 }
+                output.push_str(content);
             }
             if let Some(ref calls) = msg.tool_calls {
                 for tc in calls {

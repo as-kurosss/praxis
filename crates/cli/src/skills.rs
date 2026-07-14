@@ -131,6 +131,20 @@ pub fn execute_info(args: &SkillsInfoArgs) {
                                 if *enabled { "(enabled)" } else { "(disabled)" }
                             );
                         }
+                        praxis_core::registry::ToolBinding::Mcp {
+                            server_name,
+                            tools,
+                            enabled,
+                            ..
+                        } => {
+                            println!(
+                                "    - MCP:{server_name} {}",
+                                if *enabled { "(enabled)" } else { "(disabled)" }
+                            );
+                            if !tools.is_empty() {
+                                println!("      Tools: {}", tools.join(", "));
+                            }
+                        }
                     }
                 }
             }

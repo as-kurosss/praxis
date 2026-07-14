@@ -9,12 +9,16 @@
 //! * [`Supervisor`] — a leader agent delegates to worker agents
 //! * [`Router`] — route input to an agent based on a routing function
 
+#[cfg(feature = "a2a")]
+pub mod a2a;
 pub mod acp;
 mod broadcast;
 mod round_robin;
 mod router;
 mod supervisor;
 
+#[cfg(feature = "a2a")]
+pub use a2a::*;
 pub use acp::*;
 pub use broadcast::Broadcast;
 pub use round_robin::RoundRobin;

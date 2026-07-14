@@ -9,7 +9,9 @@
 pub mod anthropic;
 pub mod gemini;
 pub mod openai;
+pub mod provider_factory;
 
 pub use anthropic::*;
 pub use gemini::*;
 pub use openai::*;
+pub use provider_factory::*;

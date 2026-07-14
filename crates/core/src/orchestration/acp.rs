@@ -267,13 +267,7 @@ impl StdioTransport {
         runner: &str,
         args: &[&str],
     ) -> Result<Self, AcpError> {
-        let binary = match runner {
-            "claude" => "claude",
-            "codex" => "codex",
-            "opencode" => "opencode",
-            "qwen" => "qwen",
-            other => other,
-        };
+        let binary = runner;
 
         let mut child = tokio::process::Command::new(binary)
             .args(args)
@@ -357,10 +351,10 @@ impl Drop for StdioTransport {
             handle.abort();
         }
         // Kill the child process
-        if let Ok(mut child_lock) = self.child.lock() {
-            if let Some(mut child) = child_lock.take() {
-                let _ = child.start_kill();
-            }
+        if let Ok(mut child_lock) = self.child.lock()
+            && let Some(mut child) = child_lock.take()
+        {
+            let _ = child.start_kill();
         }
     }
 }

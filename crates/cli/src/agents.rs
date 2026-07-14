@@ -130,11 +130,11 @@ pub fn execute_create(args: &AgentsCreateArgs) {
     let reg_path = default_registry_path();
 
     // Ensure parent dir exists
-    if let Some(parent) = reg_path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            eprintln!("Error: cannot create registry directory: {e}");
-            return;
-        }
+    if let Some(parent) = reg_path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        eprintln!("Error: cannot create registry directory: {e}");
+        return;
     }
 
     let registry = match AgentRegistry::open(&reg_path) {
@@ -291,7 +291,7 @@ fn auto_create_provider(provider_str: &str) -> Option<ProviderConfig> {
     if let Some(url) = url {
         config = config.with_url(url);
     }
-    config.notes = Some(format!("Auto-created by `praxis agents create`"));
+    config.notes = Some("Auto-created by `praxis agents create`".to_string());
 
     Some(config)
 }

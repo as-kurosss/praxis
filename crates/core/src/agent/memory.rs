@@ -13,6 +13,9 @@
 use crate::agent::llm::{ChatMessage, Role};
 use std::sync::Arc;
 
+/// Summarizer function type.
+type SummarizerFn = Arc<dyn Fn(&[ChatMessage]) -> String + Send + Sync>;
+
 /// Strategy for managing the length of a conversation history.
 ///
 /// Choose a strategy based on your token budget and agent requirements.
@@ -39,7 +42,7 @@ pub enum ScrollStrategy {
         /// Target total messages (summary + system + recent).
         max_messages: usize,
         /// Callback that compresses a batch of messages into a summary.
-        summarizer: Arc<dyn Fn(&[ChatMessage]) -> String + Send + Sync>,
+        summarizer: SummarizerFn,
     },
     /// Keep all messages — no trimming applied.
     NoOp,

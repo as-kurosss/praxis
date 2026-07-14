@@ -8,12 +8,11 @@
 
 use praxis_core::loops::{GraphSnapshot, NodeId};
 use praxis_core::persistence::{load_snapshot, save_snapshot};
-use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("═══ Praxis — Persistent Graph ═══");
 
-    let path = PathBuf::from(std::env::temp_dir()).join("praxis_graph_snapshot.json");
+    let path = std::env::temp_dir().join("praxis_graph_snapshot.json");
     println!("Snapshot path: {}", path.display());
 
     // Create and save a snapshot

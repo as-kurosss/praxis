@@ -37,7 +37,7 @@ impl Tool for TimeTool {
 
         Ok(json!({
             "unix_timestamp_secs": unix_secs,
-            "unix_timestamp_ms": unix_secs as u64 * 1000 + millis as u64,
+            "unix_timestamp_ms": unix_secs * 1000 + millis as u64,
             "date_iso": iso_date(unix_secs),
             "timezone": "UTC",
         }))

@@ -5,6 +5,7 @@
 
 use crate::agent::tool::ToolSpec;
 use serde_json::Value;
+use std::sync::Arc;
 
 /// Role of a message in the conversation.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -238,5 +239,19 @@ pub trait LlmClient: Send + Sync {
         _request: ChatRequest,
     ) -> Result<tokio::sync::mpsc::Receiver<StreamChunk>, LlmError> {
         Err(LlmError::Request("streaming not supported".into()))
+    }
+}
+
+#[async_trait::async_trait]
+impl LlmClient for Arc<dyn LlmClient> {
+    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, LlmError> {
+        self.as_ref().chat(request).await
+    }
+
+    async fn chat_stream(
+        &self,
+        request: ChatRequest,
+    ) -> Result<tokio::sync::mpsc::Receiver<StreamChunk>, LlmError> {
+        self.as_ref().chat_stream(request).await
     }
 }

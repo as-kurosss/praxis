@@ -177,8 +177,7 @@ mod tests {
         // Spawn the gate execution
         let jh = tokio::spawn(async move {
             let mut state = "pending".to_string();
-            let result = gate.execute(make_ctx("test"), &mut state).await;
-            result
+            gate.execute(make_ctx("test"), &mut state).await
         });
 
         // Give the gate a moment to start waiting, then approve
@@ -197,8 +196,7 @@ mod tests {
 
         let jh = tokio::spawn(async move {
             let mut state = "data".to_string();
-            let result = gate.execute(make_ctx("test"), &mut state).await;
-            result
+            gate.execute(make_ctx("test"), &mut state).await
         });
 
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;

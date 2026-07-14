@@ -332,32 +332,28 @@ impl SkillScanner {
         }
 
         // Extension-specific checks
-        match extension {
-            "py" => {
-                if let Some(line) = find_line(content, "__import__") {
-                    findings.push(Finding {
-                        file: file.to_path_buf(),
-                        line,
-                        message: "Dynamic import detected (__import__)".into(),
-                        risk_level: RiskLevel::Medium,
-                        category: FindingCategory::DangerousImport,
-                        snippet: "__import__".into(),
-                    });
-                }
+        if extension == "py" {
+            if let Some(line) = find_line(content, "__import__") {
+                findings.push(Finding {
+                    file: file.to_path_buf(),
+                    line,
+                    message: "Dynamic import detected (__import__)".into(),
+                    risk_level: RiskLevel::Medium,
+                    category: FindingCategory::DangerousImport,
+                    snippet: "__import__".into(),
+                });
             }
-            "rs" => {
-                if let Some(line) = find_line(content, "extern \"C\"") {
-                    findings.push(Finding {
-                        file: file.to_path_buf(),
-                        line,
-                        message: "FFI extern declaration detected".into(),
-                        risk_level: RiskLevel::High,
-                        category: FindingCategory::UnsafeSystemCall,
-                        snippet: "extern \"C\"".into(),
-                    });
-                }
-            }
-            _ => {}
+        } else if extension == "rs"
+            && let Some(line) = find_line(content, "extern \"C\"")
+        {
+            findings.push(Finding {
+                file: file.to_path_buf(),
+                line,
+                message: "FFI extern declaration detected".into(),
+                risk_level: RiskLevel::High,
+                category: FindingCategory::UnsafeSystemCall,
+                snippet: "extern \"C\"".into(),
+            });
         }
 
         findings
@@ -421,30 +417,35 @@ impl SkillScanner {
 
         // Language-specific patterns — only checked for the matching extension
         let extension = file.extension().and_then(|e| e.to_str()).unwrap_or("");
-        match extension {
-            "py" => {
-                // Python exec/eval — false positives in Rust comments/strings
-                let py_dynamic: &[(&str, RiskLevel, &str)] = &[
-                    (r"exec\(", RiskLevel::Critical, "Dynamic code execution (Python)"),
-                    (r"eval\(", RiskLevel::Critical, "Dynamic code evaluation (Python)"),
-                ];
-                for (pattern, risk, message) in py_dynamic {
-                    if let Some(line) = find_regex_line(content, pattern) {
-                        if self.is_allowed(pattern) {
-                            continue;
-                        }
-                        findings.push(Finding {
-                            file: file.to_path_buf(),
-                            line,
-                            message: message.to_string(),
-                            risk_level: *risk,
-                            category: FindingCategory::UnsafeSystemCall,
-                            snippet: truncate_snippet(pattern),
-                        });
+        if extension == "py" {
+            // Python exec/eval — false positives in Rust comments/strings
+            let py_dynamic: &[(&str, RiskLevel, &str)] = &[
+                (
+                    r"exec\(",
+                    RiskLevel::Critical,
+                    "Dynamic code execution (Python)",
+                ),
+                (
+                    r"eval\(",
+                    RiskLevel::Critical,
+                    "Dynamic code evaluation (Python)",
+                ),
+            ];
+            for (pattern, risk, message) in py_dynamic {
+                if let Some(line) = find_regex_line(content, pattern) {
+                    if self.is_allowed(pattern) {
+                        continue;
                     }
+                    findings.push(Finding {
+                        file: file.to_path_buf(),
+                        line,
+                        message: message.to_string(),
+                        risk_level: *risk,
+                        category: FindingCategory::UnsafeSystemCall,
+                        snippet: truncate_snippet(pattern),
+                    });
                 }
             }
-            _ => {}
         }
 
         findings
@@ -694,40 +695,43 @@ fn walkdir(dir: &Path, extensions: &[String], max_size: u64) -> Vec<PathBuf> {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(e) => {
-            eprintln!("praxis: scanner: warning: cannot read directory '{}': {e}", dir.display());
+            eprintln!(
+                "praxis: scanner: warning: cannot read directory '{}': {e}",
+                dir.display()
+            );
             return files;
         }
     };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                // Skip hidden directories
-                if path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|n| n.starts_with('.'))
-                    .unwrap_or(false)
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            // Skip hidden directories
+            if path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with('.'))
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            files.extend(walkdir(&path, extensions, max_size));
+        } else if path.is_file() {
+            // Check extension
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| format!(".{e}"))
+                .unwrap_or_default();
+            if extensions.iter().any(|e| e == &ext) {
+                // Check file size
+                if let Ok(meta) = std::fs::metadata(&path)
+                    && meta.len() <= max_size
                 {
-                    continue;
-                }
-                files.extend(walkdir(&path, extensions, max_size));
-            } else if path.is_file() {
-                // Check extension
-                let ext = path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(|e| format!(".{e}"))
-                    .unwrap_or_default();
-                if extensions.iter().any(|e| e == &ext) {
-                    // Check file size
-                    if let Ok(meta) = std::fs::metadata(&path) {
-                        if meta.len() <= max_size {
-                            files.push(path);
-                        }
-                    }
+                    files.push(path);
                 }
             }
         }
+    }
 
     files
 }

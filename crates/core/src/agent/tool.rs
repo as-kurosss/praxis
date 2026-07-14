@@ -10,9 +10,12 @@ use std::sync::Arc;
 ///
 /// Used by [`GovernedTool`](crate::sandbox::GovernedTool) to decide which
 /// policy checks and sandbox routing apply.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, Default,
+)]
 pub enum ToolCategory {
     /// Generic tool with no resource access.
+    #[default]
     Generic,
     /// Shell command execution.
     Shell,
@@ -20,14 +23,8 @@ pub enum ToolCategory {
     FileRead,
     /// File write operations.
     FileWrite,
-    /// Network request operations.
+    /// Network access.
     Network,
-}
-
-impl Default for ToolCategory {
-    fn default() -> Self {
-        Self::Generic
-    }
 }
 
 /// Error type for tool execution.

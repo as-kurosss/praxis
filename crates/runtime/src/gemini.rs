@@ -212,10 +212,10 @@ impl GeminiClient {
                 }
                 Role::Assistant => {
                     let mut parts = Vec::new();
-                    if let Some(ref text) = msg.content {
-                        if !text.is_empty() {
-                            parts.push(GeminiPart::Text { text: text.clone() });
-                        }
+                    if let Some(ref text) = msg.content
+                        && !text.is_empty()
+                    {
+                        parts.push(GeminiPart::Text { text: text.clone() });
                     }
                     if let Some(ref calls) = msg.tool_calls {
                         for tc in calls {

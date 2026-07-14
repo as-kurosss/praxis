@@ -9,8 +9,9 @@
 //!
 //! [`GovernedTool`] wraps any [`Tool`](crate::agent::Tool) with a policy and sandbox.
 
+mod approval;
+mod exec;
 mod policy;
-mod sandbox;
 pub mod scanner;
 mod types;
 
@@ -20,8 +21,9 @@ pub mod appcontainer;
 #[cfg(target_os = "linux")]
 pub mod bubblewrap;
 
+pub use approval::*;
+pub use exec::*;
 pub use policy::*;
-pub use sandbox::*;
 pub use scanner::{Finding, FindingCategory, ScanError, ScanReport, ScannerConfig, SkillScanner};
 pub use types::*;
 
@@ -52,6 +54,7 @@ pub struct GovernedTool<T: Tool> {
     inner: T,
     policy: Arc<dyn ResourcePolicy>,
     sandbox: Arc<dyn Sandbox>,
+    approval_gate: Option<ApprovalGate>,
 }
 
 impl<T: Tool> GovernedTool<T> {
@@ -61,7 +64,14 @@ impl<T: Tool> GovernedTool<T> {
             inner,
             policy,
             sandbox,
+            approval_gate: None,
         }
+    }
+
+    /// Attach an approval gate for interactive Ask-mode policy.
+    pub fn with_approval_gate(mut self, gate: ApprovalGate) -> Self {
+        self.approval_gate = Some(gate);
+        self
     }
 
     /// Run policy checks and route through sandbox if applicable.
@@ -114,6 +124,11 @@ impl<T: Tool + Send + Sync> Tool for GovernedTool<T> {
         let spec = self.inner.spec();
         let name = spec.name;
         let category = spec.category;
+
+        // Phase 0: Approval gate check (Allow/Deny/Ask)
+        if let Some(ref gate) = self.approval_gate {
+            gate.check(&category, &name, &args, None)?;
+        }
 
         // Phase 1: Policy check + sandbox routing decision
         let use_sandbox =

@@ -80,7 +80,7 @@ where
     pub fn record_turn(&mut self, messages: &[crate::agent::llm::ChatMessage]) {
         self.turn_count += 1;
 
-        if self.turn_count % self.segment_size == 0 && !messages.is_empty() {
+        if self.turn_count.is_multiple_of(self.segment_size) && !messages.is_empty() {
             // Determine the range of this segment
             let end_idx = self.turn_count;
             let start_idx = end_idx.saturating_sub(self.segment_size);
@@ -207,8 +207,9 @@ mod tests {
 
     #[test]
     fn test_format_context_empty() {
-        let mem: DistilledMemory<fn(&[ChatMessage]) -> (String, Vec<String>)> =
-            DistilledMemory::new(5, |_| ("".into(), vec![]));
+        let mem = DistilledMemory::<fn(&[ChatMessage]) -> (String, Vec<String>)>::new(5, |_| {
+            ("".into(), vec![])
+        });
         assert!(mem.format_context(5).is_none());
     }
 

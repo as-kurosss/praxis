@@ -27,6 +27,17 @@ pub enum ToolBinding {
         #[serde(default = "default_enabled")]
         enabled: bool,
     },
+    /// Tools exposed by an MCP server.
+    Mcp {
+        /// Server name as registered in the MCP server configuration.
+        server_name: String,
+        /// Specific tool names to include (empty = all tools from this server).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tools: Vec<String>,
+        /// Whether this binding is enabled.
+        #[serde(default = "default_enabled")]
+        enabled: bool,
+    },
 }
 
 fn default_enabled() -> bool {

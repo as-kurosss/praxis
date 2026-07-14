@@ -106,7 +106,7 @@ where
         // Spawn all branches concurrently.
         let mut join_set: JoinSet<LoopResult<O>> = JoinSet::new();
 
-        for (_idx, branch) in self.branches.iter().enumerate() {
+        for branch in self.branches.iter() {
             let branch_ctx = ctx.clone();
             let mut branch_state = state.clone();
             let branch = unsafe {

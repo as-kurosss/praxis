@@ -81,6 +81,7 @@ pub trait DocumentReader: Send + Sync {
 /// 1. UTF-8
 /// 2. UTF-16LE / UTF-16BE (via BOM)
 /// 3. Latin-1 (ISO 8859-1, fallback)
+#[derive(Default)]
 pub struct TextFileReader {
     config: DocumentConfig,
 }
@@ -96,14 +97,6 @@ impl TextFileReader {
     #[must_use]
     pub fn config(&self) -> &DocumentConfig {
         &self.config
-    }
-}
-
-impl Default for TextFileReader {
-    fn default() -> Self {
-        Self {
-            config: DocumentConfig::default(),
-        }
     }
 }
 
@@ -261,17 +254,10 @@ fn is_text_extension(ext: &str) -> bool {
 ///
 /// # Returns
 /// The text content of the document.
+#[derive(Default)]
 pub struct DocumentReadTool {
     /// Configuration for document reading.
     pub config: DocumentConfig,
-}
-
-impl Default for DocumentReadTool {
-    fn default() -> Self {
-        Self {
-            config: DocumentConfig::default(),
-        }
-    }
 }
 
 impl DocumentReadTool {

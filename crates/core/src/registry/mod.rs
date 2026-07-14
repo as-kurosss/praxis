@@ -18,8 +18,8 @@ pub use provider::*;
 mod agent_def;
 pub use agent_def::*;
 
-mod registry;
-pub use registry::*;
+mod store;
+pub use store::*;
 
 mod session;
 pub use session::*;

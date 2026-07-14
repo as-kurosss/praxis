@@ -144,12 +144,12 @@ impl StdioTransport {
 
 impl Drop for StdioTransport {
     fn drop(&mut self) {
-        if let Some(child) = self.child.take() {
-            if let Some(pid) = child.id() {
-                let _ = std::process::Command::new("taskkill")
-                    .args(["/PID", &pid.to_string(), "/F"])
-                    .output();
-            }
+        if let Some(child) = self.child.take()
+            && let Some(pid) = child.id()
+        {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/F"])
+                .output();
         }
     }
 }

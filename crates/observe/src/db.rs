@@ -254,7 +254,7 @@ impl Database {
                     agent_id: row.get(1)?,
                     session_id: row.get(2)?,
                     start_time: parse_datetime(&row.get::<_, String>(3)?).unwrap_or_default(),
-                    end_time: end_time_str.as_deref().and_then(|s| parse_datetime(s)),
+                    end_time: end_time_str.as_deref().and_then(parse_datetime),
                     status: parse_status(&status_str),
                     token_count: token_count_raw.map(|c| c as u64),
                     error: row.get(7)?,
@@ -289,7 +289,7 @@ impl Database {
                     parent_span_id: row.get(2)?,
                     name: parse_span_name(&name_str),
                     start_time: parse_datetime(&row.get::<_, String>(4)?).unwrap_or_default(),
-                    end_time: end_time_str.as_deref().and_then(|s| parse_datetime(s)),
+                    end_time: end_time_str.as_deref().and_then(parse_datetime),
                     metadata: serde_json::from_str(&row.get::<_, String>(6)?)
                         .unwrap_or(serde_json::Value::Null),
                     token_count: token_count_raw.map(|c| c as u64),

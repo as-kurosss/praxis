@@ -299,7 +299,7 @@ mod tests {
             CounterLoop {
                 counter: StdArc::clone(&counter),
             },
-            StdArc::new(|| dummy_context()),
+            StdArc::new(dummy_context),
         );
 
         let mut scheduler = Scheduler::new();
@@ -326,7 +326,7 @@ mod tests {
             CounterLoop {
                 counter: StdArc::clone(&counter),
             },
-            StdArc::new(|| dummy_context()),
+            StdArc::new(dummy_context),
         );
 
         let mut scheduler = Scheduler::new();

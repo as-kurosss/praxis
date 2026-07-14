@@ -94,6 +94,8 @@ export default function App() {
             addToast(`Task completed: ${n.message}`, 'success')
           } else if (n.kind === 'task_failed') {
             addToast(`Task failed: ${n.message}`, 'error')
+          } else if (n.kind === 'approval_created') {
+            addToast(`🔴 ${n.message}`, 'info')
           } else {
             addToast(n.message, 'info')
           }
@@ -236,6 +238,7 @@ export default function App() {
             viewMode={viewMode}
             onViewModeChange={handleViewModeChange}
             onClose={() => setShowSettings(false)}
+            addToast={addToast}
           />
         )}
       </div>

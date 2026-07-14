@@ -60,16 +60,10 @@ const DEFAULT_SIMILARITY_THRESHOLD: f64 = 0.8;
 // ── Input / Output types ────────────────────────────────────────────
 
 /// Input for a single MemoryDream run.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MemoryDreamInput {
     /// When `true`, only report what would be done without making changes.
     pub dry_run: bool,
-}
-
-impl Default for MemoryDreamInput {
-    fn default() -> Self {
-        Self { dry_run: false }
-    }
 }
 
 /// Outcome of a MemoryDream run.

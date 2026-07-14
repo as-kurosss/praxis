@@ -398,14 +398,14 @@ impl OpenAiClient {
                 |tx: &tokio::sync::mpsc::Sender<StreamChunk>,
                  args: &HashMap<String, String>,
                  names: &HashMap<String, String>| {
-                    for (id, _name) in names {
-                        if let Some(args_str) = args.get(id) {
-                            if let Ok(parsed) = serde_json::from_str(args_str) {
-                                let _ = tx.try_send(StreamChunk::ToolCallArguments {
-                                    id: id.clone(),
-                                    arguments: parsed,
-                                });
-                            }
+                    for id in names.keys() {
+                        if let Some(args_str) = args.get(id)
+                            && let Ok(parsed) = serde_json::from_str(args_str)
+                        {
+                            let _ = tx.try_send(StreamChunk::ToolCallArguments {
+                                id: id.clone(),
+                                arguments: parsed,
+                            });
                         }
                     }
                 };
@@ -423,12 +423,7 @@ impl OpenAiClient {
                 buf.push_str(&String::from_utf8_lossy(&bytes));
 
                 // Process all complete SSE events in the buffer
-                loop {
-                    let event = match extract_next_sse_event(&mut buf) {
-                        Some(e) => e,
-                        None => break,
-                    };
-
+                while let Some(event) = extract_next_sse_event(&mut buf) {
                     if event.data == "[DONE]" {
                         // Flush accumulated tool call arguments before done
                         flush_tool_call_args(&my_tx, &tool_call_args, &tool_call_names);
@@ -447,18 +442,18 @@ impl OpenAiClient {
 
                     if let Some(choice) = chunk.choices.into_iter().next() {
                         // Emit content tokens as they arrive
-                        if let Some(text) = choice.delta.content {
-                            if !text.is_empty() {
-                                let _ = my_tx.try_send(StreamChunk::Token(text));
-                            }
+                        if let Some(text) = choice.delta.content
+                            && !text.is_empty()
+                        {
+                            let _ = my_tx.try_send(StreamChunk::Token(text));
                         }
                         // Reasoning models may emit `reasoning_content` in delta instead of
                         // `content`.  Emit as a separate Reasoning chunk so the agent can
                         // relay it to the frontend for collapsible UI display.
-                        if let Some(reasoning) = choice.delta.reasoning_content {
-                            if !reasoning.is_empty() {
-                                let _ = my_tx.try_send(StreamChunk::Reasoning(reasoning));
-                            }
+                        if let Some(reasoning) = choice.delta.reasoning_content
+                            && !reasoning.is_empty()
+                        {
+                            let _ = my_tx.try_send(StreamChunk::Reasoning(reasoning));
                         }
 
                         // Handle tool call deltas
@@ -476,33 +471,31 @@ impl OpenAiClient {
                                         });
                                     }
                                     // May also contain first arguments fragment
-                                    if let Some(a) = &func.arguments {
-                                        if !a.is_empty() {
-                                            tool_call_args
-                                                .entry(id.clone())
-                                                .or_default()
-                                                .push_str(a);
-                                        }
+                                    if let Some(a) = &func.arguments
+                                        && !a.is_empty()
+                                    {
+                                        tool_call_args.entry(id.clone()).or_default().push_str(a);
                                     }
                                 } else if let Some(func) = &tc.function {
                                     // Subsequent deltas — arguments fragment
-                                    if let Some(a) = &func.arguments {
-                                        if !a.is_empty() && !call_id.is_empty() {
-                                            tool_call_args
-                                                .entry(call_id.clone())
-                                                .or_default()
-                                                .push_str(a);
-                                        }
+                                    if let Some(a) = &func.arguments
+                                        && !a.is_empty()
+                                        && !call_id.is_empty()
+                                    {
+                                        tool_call_args
+                                            .entry(call_id.clone())
+                                            .or_default()
+                                            .push_str(a);
                                     }
                                 }
                             }
                         }
 
                         // When finish_reason="tool_calls", flush arguments
-                        if let Some(ref reason) = choice.finish_reason {
-                            if reason == "tool_calls" {
-                                flush_tool_call_args(&my_tx, &tool_call_args, &tool_call_names);
-                            }
+                        if let Some(ref reason) = choice.finish_reason
+                            && reason == "tool_calls"
+                        {
+                            flush_tool_call_args(&my_tx, &tool_call_args, &tool_call_names);
                         }
                     }
                 }
@@ -1292,7 +1285,7 @@ mod tests {
         let client = OpenAiClient::new(
             std::env::var("OPENAI_API_URL").unwrap_or_else(|_| "https://api.openai.com/v1".into()),
             api_key,
-            &std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".into()),
+            std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".into()),
         );
         let req = ChatRequest {
             messages: vec![
