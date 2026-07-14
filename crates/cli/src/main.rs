@@ -217,6 +217,8 @@ async fn run_agent(args: RunArgs) -> Result<(), Box<dyn std::error::Error>> {
             max_tokens: None,
             scroll_strategy: None,
             model_id: None,
+            protect_active_turn: false,
+            tool_result_cap: None,
         },
         tool_set,
     );

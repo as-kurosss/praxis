@@ -20,5 +20,8 @@ mod working;
 
 pub use distilled::*;
 pub use episodic::*;
-pub use scroll::record_evicted_turn;
+pub use scroll::{
+    apply_with_active_turn_protection, build_evicted_entry, find_active_tail_boundary,
+    record_evicted_turn, record_evicted_turn_async,
+};
 pub use working::*;

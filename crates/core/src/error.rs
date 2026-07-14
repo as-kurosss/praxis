@@ -40,6 +40,9 @@ pub enum Error {
         detail: String,
     },
 
+    #[error("SQLite error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+
     #[error(transparent)]
     Internal(#[from] Box<dyn std::error::Error + Send + Sync>),
 }

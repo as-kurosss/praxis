@@ -175,6 +175,8 @@ impl<L: LlmClient + 'static> Tool for SpawnAgentTool<L> {
             temperature: None,
             max_tokens: None,
             scroll_strategy: None,
+            protect_active_turn: false,
+            tool_result_cap: None,
         };
         let sub_agent = Agent::with_tools(client, agent_config, (*self.sub_tools).clone());
 

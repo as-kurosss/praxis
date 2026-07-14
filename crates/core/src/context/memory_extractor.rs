@@ -81,6 +81,34 @@ impl MemoryExtractor {
         Ok(facts.len())
     }
 
+    /// Extract facts asynchronously via `spawn_blocking`.
+    pub async fn extract_from_turn_async(
+        &self,
+        user_input: String,
+        assistant_response: String,
+    ) -> Result<usize, SessionHistoryError> {
+        let facts = if let Some(ref extractor) = self.extractor {
+            extractor(&user_input, &assistant_response)
+        } else {
+            self.keyword_extract(&user_input, &assistant_response)
+        };
+        if facts.is_empty() {
+            return Ok(0);
+        }
+        let history = self.history.clone();
+        let n = facts.len();
+        tokio::task::spawn_blocking(move || {
+            for fact in &facts {
+                history.store_fact(fact)?;
+            }
+            Ok::<_, SessionHistoryError>(())
+        })
+        .await
+        .map_err(|e| SessionHistoryError::Io(format!("spawn_blocking: {e}")))?
+        .map_err(|e| SessionHistoryError::Io(format!("store_fact: {e}")))?;
+        Ok(n)
+    }
+
     /// Search facts by FTS5 query.
     pub fn search(
         &self,

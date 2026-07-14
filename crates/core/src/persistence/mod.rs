@@ -166,6 +166,8 @@ mod tests {
             temperature: Some(0.7),
             max_tokens: Some(4096),
             scroll_strategy: None,
+            protect_active_turn: false,
+            tool_result_cap: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         let loaded: AgentConfig = serde_json::from_str(&json).unwrap();
@@ -187,6 +189,8 @@ mod tests {
             temperature: None,
             max_tokens: None,
             scroll_strategy: None,
+            protect_active_turn: false,
+            tool_result_cap: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         // scroll_strategy should not appear in the JSON

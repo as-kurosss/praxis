@@ -602,6 +602,7 @@ fn from_openai_response(resp: OpenAiResponse) -> Result<ChatResponse, OpenAiErro
         reasoning_content: message.reasoning_content,
         tool_calls,
         tool_call_id: None,
+        qwenpaw_tag: None,
     };
 
     let usage = resp.usage.map(|u| Usage {

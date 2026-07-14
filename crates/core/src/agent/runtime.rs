@@ -10,6 +10,7 @@ use crate::context::{MemoryExtractor, SessionScroll};
 use crate::loops::{Context, Loop, LoopResult};
 use crate::memory::EpisodicMemory;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -34,6 +35,16 @@ pub struct AgentConfig {
     /// Skipped during serialization (closures are not serializable).
     #[serde(skip)]
     pub scroll_strategy: Option<super::memory::ScrollStrategy>,
+    /// When `true`, the active user turn (the most recent real user message
+    /// and everything after it) is pinned and excluded from scroll eviction.
+    /// Synthetic loop-continuation messages (tagged `qwenpaw_tag = "loop_continuation"`)
+    /// do NOT count as real user messages.
+    #[serde(default)]
+    pub protect_active_turn: bool,
+    /// Maximum bytes allowed per tool result before it is capped and stored
+    /// in the episodic SQLite store.  `None` means no capping.
+    #[serde(default)]
+    pub tool_result_cap: Option<usize>,
 }
 
 impl Default for AgentConfig {
@@ -45,6 +56,8 @@ impl Default for AgentConfig {
             temperature: None,
             max_tokens: None,
             scroll_strategy: None,
+            protect_active_turn: false,
+            tool_result_cap: None,
         }
     }
 }
@@ -67,7 +80,7 @@ pub struct Agent<L: LlmClient> {
     client: L,
     config: AgentConfig,
     tools: ToolSet,
-    episodic_memory: Option<Mutex<EpisodicMemory>>,
+    episodic_memory: Option<Arc<Mutex<EpisodicMemory>>>,
     session_scroll: Option<SessionScroll>,
     memory_extractor: Option<MemoryExtractor>,
     turn_counter: AtomicU64,
@@ -113,14 +126,20 @@ impl<L: LlmClient> Agent<L> {
     }
 
     /// Attach an episodic memory to this agent for full history recording.
+    ///
+    /// Also auto-registers a [`RecallHistoryTool`] so the agent can search
+    /// and retrieve past turns and capped tool results on demand.
     pub fn with_episodic_memory(mut self, memory: EpisodicMemory) -> Self {
-        self.episodic_memory = Some(Mutex::new(memory));
+        self.episodic_memory = Some(Arc::new(Mutex::new(memory)));
+        self.tools.add(crate::tools::RecallHistoryTool::new(
+            self.episodic_memory.as_ref().unwrap().clone(),
+        ));
         self
     }
 
     /// Reference to the optional episodic memory (for inspection).
     pub fn episodic_memory(&self) -> Option<&Mutex<EpisodicMemory>> {
-        self.episodic_memory.as_ref()
+        self.episodic_memory.as_ref().map(Arc::as_ref)
     }
 
     /// Register a tool that the agent can call.
@@ -183,7 +202,7 @@ impl<L: LlmClient> Agent<L> {
 
         // Load persistent history into an empty state (first call of a session)
         if let Some(ref scroll) = self.session_scroll
-            && let Err(e) = scroll.load_into_state(state)
+            && let Err(e) = scroll.load_into_state_async(state).await
         {
             // Non-fatal: log and continue with what we have
             eprintln!("[session_scroll] load_into_state: {e}");
@@ -203,7 +222,7 @@ impl<L: LlmClient> Agent<L> {
             // Persist the user turn
             if let Some(ref scroll) = self.session_scroll {
                 let tokens = input.len() as i64 / 4;
-                if let Err(e) = scroll.save_turn("user", Some(&input), tokens) {
+                if let Err(e) = scroll.save_turn_async("user", Some(&input), tokens).await {
                     eprintln!("[session_scroll] save user turn: {e}");
                 }
             }
@@ -212,20 +231,23 @@ impl<L: LlmClient> Agent<L> {
         // Apply scroll strategy and record evicted turns in episodic memory
         if let Some(ref strategy) = self.config.scroll_strategy {
             let before = state.clone();
-            strategy.apply(state);
+            if self.config.protect_active_turn {
+                crate::memory::apply_with_active_turn_protection(strategy, state);
+            } else {
+                strategy.apply(state);
+            }
             if before.len() > state.len() {
                 let counter = self.turn_counter.fetch_add(1, Ordering::SeqCst);
-                if let Some(ref episodic_mutex) = self.episodic_memory
-                    && let Ok(mut episodic) = episodic_mutex.lock()
-                {
+                if let Some(ref episodic_arc) = self.episodic_memory {
                     let turn_id = format!("turn_{}", counter + 1);
-                    crate::memory::record_evicted_turn(
-                        &mut episodic,
+                    crate::memory::record_evicted_turn_async(
+                        episodic_arc,
                         &turn_id,
                         &input,
                         &before,
                         state,
-                    );
+                    )
+                    .await;
                 }
             }
         }
@@ -365,11 +387,15 @@ impl<L: LlmClient> Agent<L> {
                         } else {
                             if let Some(ref scroll) = self.session_scroll {
                                 let tokens = fallback_text.len() as i64 / 4;
-                                let _ = scroll.save_turn("assistant", Some(&fallback_text), tokens);
+                                let _ = scroll
+                                    .save_turn_async("assistant", Some(&fallback_text), tokens)
+                                    .await;
                             }
                             // Memory extraction
                             if let Some(ref extractor) = self.memory_extractor {
-                                let _ = extractor.extract_from_turn(&input, &fallback_text);
+                                let _ = extractor
+                                    .extract_from_turn_async(input.clone(), fallback_text.clone())
+                                    .await;
                             }
                             return LoopResult::success(
                                 fallback_text,
@@ -516,6 +542,36 @@ impl<L: LlmClient> Agent<L> {
                     let result = self.tools.execute(&tc.name, tc.arguments.clone()).await;
                     match result {
                         Ok(value) => {
+                            // Tool-result capping: if the result exceeds the configured limit,
+                            // store the full payload in SQLite and push a compact stub instead.
+                            if let Some(cap) = self.config.tool_result_cap {
+                                let result_str = value.to_string();
+                                if result_str.len() > cap
+                                    && let Some(ref episodic_arc) = self.episodic_memory
+                                {
+                                    let args_str = tc.arguments.to_string();
+                                    let stored = episodic_arc.lock().ok().is_some_and(|mem| {
+                                        mem.store_capped_tool_result(
+                                            &tc.id,
+                                            &tc.name,
+                                            &args_str,
+                                            &result_str,
+                                        )
+                                    });
+                                    if stored {
+                                        let size_kb = result_str.len() as f64 / 1024.0;
+                                        let stub = format!(
+                                            "[tool_result: {:.1} KiB, recall with recall_tool(tool_call_id: \"{}\")]",
+                                            size_kb, tc.id
+                                        );
+                                        state.push(ChatMessage::tool_result(
+                                            &tc.id,
+                                            &serde_json::json!({"capped": stub}),
+                                        ));
+                                        continue;
+                                    }
+                                }
+                            }
                             state.push(ChatMessage::tool_result(&tc.id, &value));
                         }
                         Err(e) => {
@@ -534,20 +590,29 @@ impl<L: LlmClient> Agent<L> {
                         StreamChunk::ToolCallEnd { id: tc.id.clone() },
                     );
                 }
-                // Apply scroll strategy to trim history before next iteration
+                // Apply scroll strategy with token-awareness
                 if let Some(ref strategy) = self.config.scroll_strategy {
-                    strategy.apply(state);
+                    crate::context::context_window::apply_strategy_with_context_window(
+                        strategy,
+                        state,
+                        &self.config.model,
+                        None, // explicit_window — not yet in AgentConfig
+                    );
                 }
                 // Continue — LLM will see tool results next iteration
             } else {
                 // Token already emitted during streaming; non-streaming also emitted above
                 if let Some(ref scroll) = self.session_scroll {
                     let tokens = response_text.len() as i64 / 4;
-                    let _ = scroll.save_turn("assistant", Some(&response_text), tokens);
+                    let _ = scroll
+                        .save_turn_async("assistant", Some(&response_text), tokens)
+                        .await;
                 }
                 // Memory extraction
                 if let Some(ref extractor) = self.memory_extractor {
-                    let _ = extractor.extract_from_turn(&input, &response_text);
+                    let _ = extractor
+                        .extract_from_turn_async(input.clone(), response_text.clone())
+                        .await;
                 }
                 return LoopResult::success(
                     response_text,

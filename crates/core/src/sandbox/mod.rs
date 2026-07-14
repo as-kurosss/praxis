@@ -10,6 +10,7 @@
 //! [`GovernedTool`] wraps any [`Tool`](crate::agent::Tool) with a policy and sandbox.
 
 mod approval;
+mod env_gate;
 mod exec;
 mod policy;
 pub mod scanner;
@@ -22,6 +23,7 @@ pub mod appcontainer;
 pub mod bubblewrap;
 
 pub use approval::*;
+pub use env_gate::*;
 pub use exec::*;
 pub use policy::*;
 pub use scanner::{Finding, FindingCategory, ScanError, ScanReport, ScannerConfig, SkillScanner};
@@ -55,6 +57,7 @@ pub struct GovernedTool<T: Tool> {
     policy: Arc<dyn ResourcePolicy>,
     sandbox: Arc<dyn Sandbox>,
     approval_gate: Option<ApprovalGate>,
+    env_gates: Vec<EnvGate>,
 }
 
 impl<T: Tool> GovernedTool<T> {
@@ -65,12 +68,19 @@ impl<T: Tool> GovernedTool<T> {
             policy,
             sandbox,
             approval_gate: None,
+            env_gates: Vec::new(),
         }
     }
 
     /// Attach an approval gate for interactive Ask-mode policy.
     pub fn with_approval_gate(mut self, gate: ApprovalGate) -> Self {
         self.approval_gate = Some(gate);
+        self
+    }
+
+    /// Add an environment-variable gate that must pass before execution.
+    pub fn with_env_gate(mut self, gate: EnvGate) -> Self {
+        self.env_gates.push(gate);
         self
     }
 
@@ -128,6 +138,11 @@ impl<T: Tool + Send + Sync> Tool for GovernedTool<T> {
         // Phase 0: Approval gate check (Allow/Deny/Ask)
         if let Some(ref gate) = self.approval_gate {
             gate.check(&category, &name, &args, None)?;
+        }
+
+        // Phase 0.5: Env gate checks
+        for gate in &self.env_gates {
+            gate.check(&name)?;
         }
 
         // Phase 1: Policy check + sandbox routing decision

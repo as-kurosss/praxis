@@ -149,7 +149,8 @@ where
             };
         }
 
-        let entries: Vec<crate::memory::EpisodicEntry> = memory.iter().cloned().collect();
+        let entries: Vec<crate::memory::EpisodicEntry> =
+            memory.iter().into_iter().cloned().collect();
 
         // ── Step 1: Deduplication ──────────────────────────────────
         let mut to_remove: Vec<String> = Vec::new();
@@ -211,7 +212,7 @@ where
 
         if duplicates_removed > 0 && !dry_run {
             for id in &to_remove {
-                memory.remove_entry(id);
+                memory.remove(id);
             }
             summary_parts.push(format!("Removed {duplicates_removed} duplicate entries"));
         } else if duplicates_removed > 0 {

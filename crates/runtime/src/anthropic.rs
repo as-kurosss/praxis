@@ -374,6 +374,7 @@ fn from_anthropic_response(resp: AnthropicResponse) -> ChatResponse {
         reasoning_content: None,
         tool_calls,
         tool_call_id: None,
+        qwenpaw_tag: None,
     };
 
     let usage = resp.usage.map(|u| Usage {

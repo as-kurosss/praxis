@@ -13,6 +13,7 @@ pub mod calculator;
 pub mod custom;
 pub mod delegate_external;
 pub mod document_read;
+pub mod recall_history;
 pub mod shell_tool;
 pub mod time_tool;
 pub mod web_search;
@@ -23,6 +24,7 @@ pub use delegate_external::{
     DelegateExternalAgentTool, DelegateExternalConfig, ExternalAgentRunner,
 };
 pub use document_read::{DocumentConfig, DocumentError, DocumentReadTool, DocumentReader};
+pub use recall_history::RecallHistoryTool;
 pub use shell_tool::ShellTool;
 pub use time_tool::TimeTool;
 pub use web_search::{SearchResult, WebSearchProvider, WebSearchProviderKind, WebSearchTool};

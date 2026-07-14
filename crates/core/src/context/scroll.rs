@@ -21,10 +21,11 @@
 
 use super::session_history::{MemoryFact, SessionHistory, SessionHistoryError, TurnRecord};
 use crate::agent::llm::ChatMessage;
+use std::sync::Arc;
 
 /// Bridge between `SessionHistory` and the agent's in-memory state.
 pub struct SessionScroll {
-    history: SessionHistory,
+    history: Arc<SessionHistory>,
     /// How many recent non-evicted turns to load into an empty state.
     max_load_turns: usize,
 }
@@ -35,7 +36,7 @@ impl SessionScroll {
     /// Default: loads up to 100 recent turns when the state is empty.
     pub fn new(history: SessionHistory) -> Self {
         Self {
-            history,
+            history: Arc::new(history),
             max_load_turns: 100,
         }
     }
@@ -95,7 +96,59 @@ impl SessionScroll {
         self.history.append_turn(&record)
     }
 
-    /// Search for facts relevant to a query.
+    /// Load recent turns into `state` asynchronously via `spawn_blocking`.
+    pub async fn load_into_state_async(
+        &self,
+        state: &mut Vec<ChatMessage>,
+    ) -> Result<(), SessionHistoryError> {
+        if !state.is_empty() {
+            return Ok(());
+        }
+        let history = self.history.clone();
+        let n = self.max_load_turns;
+        let records = tokio::task::spawn_blocking(move || history.get_recent(n))
+            .await
+            .map_err(|e| SessionHistoryError::Io(format!("spawn_blocking: {e}")))?
+            .map_err(|e| SessionHistoryError::Io(format!("load: {e}")))?; // existing Io wrapping
+        for rec in &records {
+            state.push(Self::record_to_message(rec));
+        }
+        Ok(())
+    }
+
+    /// Save a turn asynchronously via `spawn_blocking`.
+    pub async fn save_turn_async(
+        &self,
+        role: &str,
+        content: Option<&str>,
+        token_count: i64,
+    ) -> Result<(), SessionHistoryError> {
+        let history = self.history.clone();
+        let role = role.to_string();
+        let content = content.map(String::from);
+        tokio::task::spawn_blocking(move || {
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+            let record = TurnRecord {
+                id: uuid::Uuid::new_v4().to_string(),
+                session_id: history.session_id().to_string(),
+                timestamp,
+                role,
+                content,
+                tool_calls: None,
+                tool_results: None,
+                token_count,
+                evicted: false,
+            };
+            history.append_turn(&record)
+        })
+        .await
+        .map_err(|e| SessionHistoryError::Io(format!("spawn_blocking: {e}")))?
+    }
+
+    /// Return relevant facts for a query.
     pub fn get_relevant_facts(
         &self,
         query: &str,
@@ -118,6 +171,7 @@ impl SessionScroll {
             reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
+            qwenpaw_tag: None,
         }
     }
 }

@@ -1762,6 +1762,7 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "toml",
+ "tracing",
  "uuid",
  "wasmtime",
  "windows-sys 0.61.2",

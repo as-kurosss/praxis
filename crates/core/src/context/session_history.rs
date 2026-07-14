@@ -6,7 +6,7 @@
 
 use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// A single turn (user, assistant, or tool) in a conversation.
 #[derive(Debug, Clone)]
@@ -54,10 +54,11 @@ pub struct MemoryFact {
 ///
 /// # Threading
 ///
-/// Internal SQLite operations are synchronous.  Use `spawn_blocking` in async
-/// contexts if latency is a concern.
+/// Internal SQLite operations are synchronous.  Use the `*_async` methods
+/// or `spawn_blocking` in async contexts.
+#[derive(Clone)]
 pub struct SessionHistory {
-    db: Mutex<Connection>,
+    db: Arc<Mutex<Connection>>,
     session_id: String,
     data_dir: PathBuf,
 }
@@ -87,7 +88,7 @@ impl SessionHistory {
         Self::migrate(&db)?;
 
         Ok(Self {
-            db: Mutex::new(db),
+            db: Arc::new(Mutex::new(db)),
             session_id: session_id.to_string(),
             data_dir: session_dir,
         })
@@ -99,7 +100,7 @@ impl SessionHistory {
             .map_err(|e| SessionHistoryError::Io(format!("cannot open in-memory db: {e}")))?;
         Self::migrate(&db)?;
         Ok(Self {
-            db: Mutex::new(db),
+            db: Arc::new(Mutex::new(db)),
             session_id: session_id.to_string(),
             data_dir: PathBuf::from(":memory:"),
         })
@@ -450,6 +451,38 @@ impl SessionHistory {
     /// The session identifier.
     pub fn session_id(&self) -> &str {
         &self.session_id
+    }
+
+    // ── Async wrappers (spawn_blocking) ────────────────────────────
+
+    /// Append a turn via `spawn_blocking`.  Requires `Arc<Self>`.
+    pub async fn append_turn_async(
+        self: Arc<Self>,
+        record: TurnRecord,
+    ) -> Result<(), SessionHistoryError> {
+        tokio::task::spawn_blocking(move || self.append_turn(&record))
+            .await
+            .map_err(|e| SessionHistoryError::Io(format!("spawn_blocking: {e}")))?
+    }
+
+    /// Get recent turns via `spawn_blocking`.  Requires `Arc<Self>`.
+    pub async fn get_recent_async(
+        self: Arc<Self>,
+        n: usize,
+    ) -> Result<Vec<TurnRecord>, SessionHistoryError> {
+        tokio::task::spawn_blocking(move || self.get_recent(n))
+            .await
+            .map_err(|e| SessionHistoryError::Io(format!("spawn_blocking: {e}")))?
+    }
+
+    /// Store a fact via `spawn_blocking`.  Requires `Arc<Self>`.
+    pub async fn store_fact_async(
+        self: Arc<Self>,
+        fact: MemoryFact,
+    ) -> Result<(), SessionHistoryError> {
+        tokio::task::spawn_blocking(move || self.store_fact(&fact))
+            .await
+            .map_err(|e| SessionHistoryError::Io(format!("spawn_blocking: {e}")))?
     }
 }
 

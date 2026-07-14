@@ -727,6 +727,8 @@ async fn chat_handler(
         max_tokens: body.max_tokens.or(def.max_tokens),
         scroll_strategy: scroll_strategy(&def.scroll_strategy),
         model_id: def.model_id.clone(),
+        protect_active_turn: false,
+        tool_result_cap: None,
     };
 
     // 5. Get or create session
@@ -810,6 +812,8 @@ async fn chat_stream_handler(
         max_tokens: params.max_tokens.or(def.max_tokens),
         scroll_strategy: scroll_strategy(&def.scroll_strategy),
         model_id: def.model_id.clone(),
+        protect_active_turn: false,
+        tool_result_cap: None,
     };
 
     let session_id = params

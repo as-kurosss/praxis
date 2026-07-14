@@ -10,7 +10,7 @@ and **Proactive** — that compose into complex agent workflows.
 ## Features
 
 - **Loop Engine** — four primitive execution cycles (Turn, Goal, Time, Proactive) that compose recursively; state-graph with conditional edges and nested sub-graphs
-- **Agent Runtime** — LLM-powered tool-calling agent with streaming, configurable system prompts, temperature, max tokens, and scroll strategies
+- **Agent Runtime** — LLM-powered tool-calling agent with streaming, configurable system prompts, temperature, max tokens, scroll strategies, tool-result capping, and active-turn protection
 - **Multiple LLM Providers** — OpenAI-compatible, Anthropic Claude, Google Gemini
 - **Tool Ecosystem** — Shell, Calculator, Time, and extensible `Tool` trait with `ToolCategory` for policy routing
 - **Sub-agent Spawning** — agents can spawn and communicate with child agents with isolated state
@@ -21,7 +21,12 @@ and **Proactive** — that compose into complex agent workflows.
 - **Governance Matrix** — per-agent resource access control: Allow/Deny/Ask matrix by tool category, ToolGuard (AllowList/BlockList), and FileGuard (restricted paths with sensitive pattern blocking)
 - **Sandbox & Governance** — policy enforcement (shell blocklists, file path restrictions, network allow/deny), sandboxed execution via `DirectSandbox` with async trait API
 - **Scheduler** — cron-like task scheduling engine with Interval/Cron/Once/Recurring schedules and persistent JSON-backed task definitions
-- **Memory System** — multi-layer memory: `WorkingMemory` with scroll strategies (Truncate, SlidingWindow, Summarize), `EpisodicMemory` with keyword-indexed IDF-weighted recall, `DistilledMemory` with periodic summarization
+- **Memory System** — multi-layer memory: `WorkingMemory` with scroll strategies (Truncate, SlidingWindow, Summarize), `EpisodicMemory` with SQLite+FTS5 persistent backend and keyword-indexed IDF-weighted recall, `DistilledMemory` with periodic summarization
+- **Episodic Memory (SQLite+FTS5)** — durable full-history recording with WAL mode, FTS5 full-text search, and `RecallHistoryTool` for in-context retrieval of evicted turns and capped tool results
+- **Active-Turn Protection** — scroll eviction skips the current user turn and all subsequent messages, preventing loss of in-progress context
+- **Tool-Result Capping** — oversized tool results are stored in SQLite and replaced with a compact stub + recall pointer; the agent can retrieve the full payload on demand via `recall_history` tool
+- **Context Window Resolver** — per-model catalog (200+ models) with configurable context window and token-aware scroll eviction strategy
+- **Async I/O** — all blocking SQLite and file operations are wrapped in `tokio::task::spawn_blocking` to avoid starving the async runtime; env-var (`PRAXIS_ALLOW_UNSANDBOXED_RECALL`) gate for unsandboxed operations
 - **Human-in-the-Loop** — Approval gates for safe agent execution
 - **MCP Integration** — Model Context Protocol client for external tools and resources
 - **State Persistence** — JSON save/load for graph snapshots and agent state

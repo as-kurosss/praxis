@@ -16,6 +16,7 @@ plugin-wasm = ["dep:wasmtime"]
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 tokio = { workspace = true, features = ["process", "io-util"] }
 uuid.workspace = true
 async-trait.workspace = true

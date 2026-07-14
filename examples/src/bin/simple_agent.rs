@@ -26,6 +26,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         temperature: Some(0.5),
         max_tokens: Some(1024),
         scroll_strategy: None,
+        protect_active_turn: false,
+        tool_result_cap: None,
     };
 
     let agent = Agent::new(client, config);
